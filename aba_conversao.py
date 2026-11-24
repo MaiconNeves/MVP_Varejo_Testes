@@ -196,85 +196,94 @@ def renderizar_aba_conversao():
             use_container_width=True,
         )
 
-		f1, f2 = st.columns([2, 1])
-		busca = f1.text_input("Buscar por SKU ou Descrição:", placeholder="Ex: Cerveja, Leite, 789...")
-		filtro_tipo = f2.selectbox(
-			"Filtrar visualização:",
-			options=["Todos os SKUs", "⚠️ Apenas Suspeitos (Revisar)", "✅ Apenas Já Ajustados (Fator > 1)"],
-		)
-		
-	df_view = df_analise.copy()
-	if busca.strip():
-		termo = busca.strip().lower()
-		mask_sku = df_view["SKU"].str.lower().str.contains(termo, na=False)
-		mask_desc = df_view["Descrição"].astype(str).str.lower().str.contains(termo, na=False) if "Descrição" in df_view.columns else False
-		df_view = df_view[mask_sku | mask_desc]
-			if filtro_tipo.startswith("⚠️"):
-				df_view = df_view[df_view["Alerta_Conversao"].str.startswith("⚠️")]
-			elif filtro_tipo.startswith("✅"):
-			
-	df_view = df_view[df_view["Fator_Conversao"] > 1.0]
-	# Ordena colocando suspeitos no topo
-	df_view = df_view.sort_values(by=["Alerta_Conversao", "SKU"], ascending=[True, True]).reset_index(drop=True)
-	# Calcula prévia do custo unitário ajustado
-	df_view["Custo_Unit_Ajustado"] = np.where(
-		df_view["_Custo_Base"] > 0,
-		(df_view["_Custo_Base"] / df_view["Fator_Conversao"]).round(2),
-		0.0,
-	)
-	cols_editor = [
-	"Alerta_Conversao",
-	"SKU",
-	"Descrição",
-	"Unidade_Entrada_XML",
-	"_Custo_Base",
-	"_Preco_Base",
-	"Fator_Sugerido",
-	"Fator_Conversao",
-	"Custo_Unit_Ajustado",
-	]
-	cols_editor = [c for c in cols_editor if c in df_view.columns]
-	df_editado = st.data_editor(
-		df_view[cols_editor],
-		column_config={
-		"Alerta_Conversao": st.column_config.TextColumn("Diagnóstico", disabled=True),
-		"SKU": st.column_config.TextColumn("SKU", disabled=True),
-		"Descrição": st.column_config.TextColumn("Produto", disabled=True, width="large"),
-		"Unidade_Entrada_XML": st.column_config.TextColumn("Un. XML", disabled=True, width="small"),
-		"_Custo_Base": st.column_config.NumberColumn("Custo Nota (R$)", format="R$ %.2f", disabled=True),
-		"_Preco_Base": st.column_config.NumberColumn("Preço Venda (R$)", format="R$ %.2f", disabled=True),
-		"Fator_Sugerido": st.column_config.NumberColumn("Sugestão", format="%.0f", disabled=True, width="small"),
-		"Fator_Conversao": st.column_config.NumberColumn(
-		"Fator (Qtd por Embalagem)",
-		min_value=1.0,
-		max_value=10000.0,
-		step=1.0,
-		format="%.2f",
-		help="Informe quantas unidades vêm dentro de 1 embalagem da nota de entrada (ex: 12 para caixa com 12).",
-		),
-		"Custo_Unit_Ajustado": st.column_config.NumberColumn("Custo Unit. Real (R$)", format="R$ %.2f", disabled=True),
-	},
-	use_container_width=True,
-	hide_index=True,
-	key="editor_fator_conversao",
-	)
-	col_btn1, col_btn2 = st.columns([2, 1])
-	if col_btn1.button("✅ Aplicar Fatores de Conversão nos Indicadores", type="primary", use_container_width=True):
-		# Junta os valores atuais de todos os SKUs com as edições feitas na tela filtrada
-		mapa_final = dict(zip(df_analise["SKU"], df_analise["Fator_Conversao"]))
-			for row in df_editado.itertuples(index=False):
-				mapa_final[str(row.SKU).strip()] = float(row.Fator_Conversao)
-				novo_consolidado, novas_movs = aplicar_fator_conversao(df_consolidado, df_movs, mapa_final)
-	st.session_state["df_xml_consolidado"] = novo_consolidado
-	if not novas_movs.empty:
-		st.session_state["df_movs_detalhadas"] = novas_movs
-		st.success("Fatores aplicados! Os saldos de entrada, custos unitários e o Kardex já foram recalculados.")
-	st.rerun()
-	if col_btn2.button("✨ Aceitar Todas as Sugestões Automáticas", use_container_width=True):
-		mapa_sugestoes = dict(zip(df_analise["SKU"], df_analise["Fator_Sugerido"]))
-		novo_consolidado, novas_movs = aplicar_fator_conversao(df_consolidado, df_movs, mapa_sugestoes)
-	st.session_state["df_xml_consolidado"] = novo_consolidado
-	if not novas_movs.empty:
-		st.session_state["df_movs_detalhadas"] = novas_movs
-		st.success("Sugestões aplicadas com sucesso! Revise a tabela para conferir.")
-		st.rerun()
+    f1, f2 = st.columns(2)
+    busca = f1.text_input("Buscar por SKU ou Descrição:", placeholder="Ex: Cerveja, Leite, 789...")
+    filtro_tipo = f2.selectbox(
+        "Filtrar visualização:",
+        options=["Todos os SKUs", "⚠️ Apenas Suspeitos (Revisar)", "✅ Apenas Já Ajustados (Fator > 1)"],
+    )
+
+    df_view = df_analise.copy()
+    if busca.strip():
+        termo = busca.strip().lower()
+        mask_sku = df_view["SKU"].str.lower().str.contains(termo, na=False)
+        mask_desc = df_view["Descrição"].astype(str).str.lower().str.contains(termo, na=False) if "Descrição" in df_view.columns else False
+        df_view = df_view[mask_sku | mask_desc]
+
+    if filtro_tipo.startswith("⚠️"):
+        df_view = df_view[df_view["Alerta_Conversao"].str.startswith("⚠️")]
+    elif filtro_tipo.startswith("✅"):
+        df_view = df_view[df_view["Fator_Conversao"] > 1.0]
+
+    # Ordena colocando suspeitos no topo
+    df_view = df_view.sort_values(by=["Alerta_Conversao", "SKU"], ascending=[True, True]).reset_index(drop=True)
+
+    # Calcula prévia do custo unitário ajustado
+    df_view["Custo_Unit_Ajustado"] = np.where(
+        df_view["_Custo_Base"] > 0,
+        (df_view["_Custo_Base"] / df_view["Fator_Conversao"]).round(2),
+        0.0,
+    )
+
+    cols_editor = [
+        "Alerta_Conversao",
+        "SKU",
+        "Descrição",
+        "Unidade_Entrada_XML",
+        "_Custo_Base",
+        "_Preco_Base",
+        "Fator_Sugerido",
+        "Fator_Conversao",
+        "Custo_Unit_Ajustado",
+    ]
+    cols_editor = [c for c in cols_editor if c in df_view.columns]
+
+    df_editado = st.data_editor(
+        df_view[cols_editor],
+        column_config={
+            "Alerta_Conversao": st.column_config.TextColumn("Diagnóstico", disabled=True),
+            "SKU": st.column_config.TextColumn("SKU", disabled=True),
+            "Descrição": st.column_config.TextColumn("Produto", disabled=True, width="large"),
+            "Unidade_Entrada_XML": st.column_config.TextColumn("Un. XML", disabled=True, width="small"),
+            "_Custo_Base": st.column_config.NumberColumn("Custo Nota (R$)", format="R$ %.2f", disabled=True),
+            "_Preco_Base": st.column_config.NumberColumn("Preço Venda (R$)", format="R$ %.2f", disabled=True),
+            "Fator_Sugerido": st.column_config.NumberColumn("Sugestão", format="%.0f", disabled=True, width="small"),
+            "Fator_Conversao": st.column_config.NumberColumn(
+                "Fator (Qtd por Embalagem)",
+                min_value=1.0,
+                max_value=10000.0,
+                step=1.0,
+                format="%.2f",
+                help="Informe quantas unidades vêm dentro de 1 embalagem da nota de entrada (ex: 12 para caixa com 12).",
+            ),
+            "Custo_Unit_Ajustado": st.column_config.NumberColumn("Custo Unit. Real (R$)", format="R$ %.2f", disabled=True),
+        },
+        use_container_width=True,
+        hide_index=True,
+        key="editor_fator_conversao",
+    )
+
+    col_btn1, col_btn2 = st.columns(2)
+    if col_btn1.button("✅ Aplicar Fatores de Conversão nos Indicadores", type="primary", use_container_width=True):
+        # Junta os valores atuais de todos os SKUs com as edições feitas na tela filtrada
+        mapa_final = dict(zip(df_analise["SKU"], df_analise["Fator_Conversao"]))
+        for row in df_editado.itertuples(index=False):
+            mapa_final[str(row.SKU).strip()] = float(row.Fator_Conversao)
+
+        novo_consolidado, novas_movs = aplicar_fator_conversao(df_consolidado, df_movs, mapa_final)
+        st.session_state["df_xml_consolidado"] = novo_consolidado
+        if not novas_movs.empty:
+            st.session_state["df_movs_detalhadas"] = novas_movs
+
+        st.success("Fatores aplicados! Os saldos de entrada, custos unitários e o Kardex já foram recalculados.")
+        st.rerun()
+
+    if col_btn2.button("✨ Aceitar Todas as Sugestões Automáticas", use_container_width=True):
+        mapa_sugestoes = dict(zip(df_analise["SKU"], df_analise["Fator_Sugerido"]))
+        novo_consolidado, novas_movs = aplicar_fator_conversao(df_consolidado, df_movs, mapa_sugestoes)
+        st.session_state["df_xml_consolidado"] = novo_consolidado
+        if not novas_movs.empty:
+            st.session_state["df_movs_detalhadas"] = novas_movs
+
+        st.success("Sugestões aplicadas com sucesso! Revise a tabela para conferir.")
+        st.rerun()
