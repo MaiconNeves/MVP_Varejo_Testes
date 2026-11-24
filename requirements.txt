@@ -1,0 +1,6 @@
+streamlit
+pandas
+streamlit-qrcode-scanner
+google-genai
+pillow
+requests
