@@ -7,7 +7,7 @@ import requests
 import streamlit as st
 
 try:
-    import psycopg2
+    import psycopg
     TEM_POSTGRES = True
 except ImportError:
     TEM_POSTGRES = False
@@ -28,19 +28,13 @@ def _get_database_url() -> str | None:
 def _conectar():
     """Retorna (conexao, tipo_banco) onde tipo_banco é 'postgres' ou 'sqlite'."""
     db_url = _get_database_url()
-    if not db_url:
-        st.warning("⚠️ Debug: DATABASE_URL não foi encontrada nos Secrets.")
-    elif not TEM_POSTGRES:
-        st.warning("⚠️ Debug: O pacote psycopg2 não foi carregado (TEM_POSTGRES = False).")
-    else:
+    if db_url and TEM_POSTGRES:
         try:
-            conn = psycopg2.connect(db_url)
+            conn = psycopg.connect(db_url)
             return conn, "postgres"
         except Exception as e:
             st.error(f"❌ Erro ao conectar no Supabase: {e}")
-
     return sqlite3.connect(DB_LOCAL_PATH), "sqlite"
-
 
 def inicializar_banco():
     """Cria as tabelas Multi-Tenant (separadas por loja_id) no Supabase ou SQLite."""
