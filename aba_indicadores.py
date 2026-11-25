@@ -701,11 +701,11 @@ def renderizar_aba_indicadores():
         if df_acao.empty:
             st.success("Nenhum produto enquadrado neste filtro no momento!")
         else:
-			df_exib_comprador = df_acao.copy()
-			df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
-			df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
-			df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
-			cols_simples = [
+            df_exib_comprador = df_acao.copy()
+            df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
+            df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
+            df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
+        cols_simples = [
 			"Status_Estoque",
 			"Curva_ABC",
 			"Categoria",
