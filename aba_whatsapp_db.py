@@ -220,9 +220,15 @@ def montar_mensagem_whatsapp(nome_loja: str, responsavel: str, df_ind: pd.DataFr
     saudacao = f"Olá *{responsavel}*!" if responsavel else "Olá!"
     df = df_ind.copy()
 
-    df["Saldo_Calculado"] = pd.to_numeric(df.get("Saldo_Calculado", 0), errors="coerce").fillna(0.0)
-    df["DMD"] = pd.to_numeric(df.get("DMD", 0), errors="coerce").fillna(0.0)
-    df["Total_Saidas"] = pd.to_numeric(df.get("Total_Saidas", 0), errors="coerce").fillna(0.0)
+    # Blindagem caso alguma coluna calculada ainda não exista no DataFrame
+    for col in ["Saldo_Calculado", "DMD", "Total_Saidas"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        else:
+            df[col] = 0.0
+
+    if "Curva_ABC" not in df.columns:
+        df["Curva_ABC"] = "A"
 
     if tipo_msg == "🚨 Ruptura Crítica (Curva A)":
         criticos = df[df["Saldo_Calculado"] <= 0].sort_values(by=["Curva_ABC", "DMD"], ascending=[True, False]).head(6)
@@ -236,23 +242,9 @@ def montar_mensagem_whatsapp(nome_loja: str, responsavel: str, df_ind: pd.DataFr
         for _, r in criticos.iterrows():
             dmd = float(r["DMD"])
             sug = int(max(1, round(dmd * 15 - float(r["Saldo_Calculado"]))))
-            linhas.append(f"🛑 *{r['Descrição']}* _(Curva {r.get('Curva_ABC', 'A')})_")
+            linhas.append(f"🛑 *{r.get('Descrição', r.get('SKU', 'Produto'))}* _(Curva {r.get('Curva_ABC', 'A')})_")
             linhas.append(f"   • Venda média: {dmd:.1f}/dia | Sugestão compra: *{sug} un*")
         linhas.append("\n💡 _Priorize a reposição desses itens para não perder venda hoje!_")
-        return "\n".join(linhas)
-
-    elif tipo_msg == "📦 Estoque Parado / Gôndola":
-        parados = df[(df["Saldo_Calculado"] > 0) & (df["Total_Saidas"] == 0)].sort_values(by="Saldo_Calculado", ascending=False).head(6)
-        if parados.empty:
-            return f"✅ *{nome_loja.upper()}* — Todos os itens com estoque positivo tiveram giro no período!"
-
-        linhas = [
-            f"📦 *ALERTA DE GÔNDOLA — {nome_loja.upper()}*",
-            f"{saudacao} Identificamos produtos com *saldo no estoque, mas ZERO venda*:\n"
-        ]
-        for _, r in parados.iterrows():
-            linhas.append(f"▪️ *{r['Descrição']}* — Saldo: *{int(r['Saldo_Calculado'])} un*")
-        linhas.append("\n⚠️ _Confira se o produto está abastecido na prateleira ou com etiqueta de preço!_")
         return "\n".join(linhas)
 
     else:
