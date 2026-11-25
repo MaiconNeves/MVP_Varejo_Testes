@@ -64,7 +64,7 @@ def _carregar_planilha_universal(arquivo) -> pd.DataFrame:
         try:
             texto = dados.decode(enc)
             linhas = texto.splitlines()
-            primeira_linha = linhas if linhas else ""
+            primeira_linha = linhas[0] if linhas else ""
             if ";" in primeira_linha:
                 sep = ";"
             elif "\t" in primeira_linha:
@@ -152,7 +152,7 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
 
     for elem in root.iter():
         if "}" in elem.tag:
-            elem.tag = elem.tag.split("}", 1)
+            elem.tag = elem.tag.split("}", 1)[-1]
 
     inf_nfe = root.find(".//infNFe")
     if inf_nfe is None:
@@ -227,255 +227,304 @@ def _extrair_arquivos_xml(arquivos_enviados) -> list[tuple[str, bytes]]:
     return xmls
 
 
-    def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: str):
-        """Lê, normaliza e permite mapeamento manual caso o cliente envie colunas com nomes diferentes."""
-        try:
-            df_bruto = _carregar_planilha_universal(arquivo_enviado)
-            df_norm = _normalizar_colunas_planilha(df_bruto)
+def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: str):
+    """Lê, normaliza e permite mapeamento manual caso o cliente envie colunas com nomes diferentes."""
+    try:
+        df_bruto = _carregar_planilha_universal(arquivo_enviado)
+        df_norm = _normalizar_colunas_planilha(df_bruto)
 
-            if "SKU" not in df_norm.columns or "Qtd Inicial" not in df_norm.columns:
-                st.warning(
-                    "Algumas colunas vieram com nomes diferentes do padrão. "
-                    "Selecione abaixo quais colunas correspondem ao **Código/SKU** e ao **Saldo Inicial**:"
-                )
-                colunas_originais = list(df_bruto.columns)
-                c_m1, c_m2, c_m3 = st.columns(3)
-                col_sku = c_m1.selectbox("Coluna de SKU / Código:", colunas_originais, key=f"{key_prefix}_sku")
-                col_qtd = c_m2.selectbox("Coluna de Qtd Inicial / Saldo:", colunas_originais, key=f"{key_prefix}_qtd")
-                col_desc = c_m3.selectbox(
-                    "Coluna de Descrição (opcional):",
-                    ["(Nenhuma)"] + colunas_originais,
-                    key=f"{key_prefix}_desc",
-                )
-
-                if st.button("✅ Confirmar Mapeamento de Colunas", key=f"{key_prefix}_btn"):
-                    mapa_manual = {col_sku: "SKU", col_qtd: "Qtd Inicial"}
-                    if col_desc != "(Nenhuma)":
-                        mapa_manual[col_desc] = "Descrição"
-                    df_norm = _normalizar_colunas_planilha(df_bruto.rename(columns=mapa_manual))
-                else:
-                    st.dataframe(df_bruto.head(5), use_container_width=True, hide_index=True)
-                    return
-
-            if "SKU" in df_norm.columns and "Qtd Inicial" in df_norm.columns:
-                st.session_state["ponto_partida"] = {
-                    "origem": origem_label,
-                    "data_corte": str(df_norm["Ref_Data"].iloc) if "Ref_Data" in df_norm.columns else "",
-                    "df_base_proximo_ciclo": df_norm,
-                }
-
-
-                st.success(f"Planilha carregada com sucesso ({len(df_norm)} SKUs reconhecidos)! Avance para a Etapa 2.")
-            st.dataframe(df_norm.head(15), use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.error(f"Erro ao ler a planilha: {e}")
-            def _renderizar_etapa_1_ponto_partida():
-                st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Anterior)")
-            st.caption(
-            "Aceita planilhas em qualquer formato (.XLSX, .XLS, .CSV, .ODS) e reconhece automaticamente "
-            "variações nos nomes das colunas (ex: Código/SKU, Saldo/Estoque/Qtd Inicial)."
+        if "SKU" not in df_norm.columns or "Qtd Inicial" not in df_norm.columns:
+            st.warning(
+                "Algumas colunas vieram com nomes diferentes do padrão. "
+                "Selecione abaixo quais colunas correspondem ao **Código/SKU** e ao **Saldo Inicial**:"
             )
-            opcao = st.radio(
-            "Como deseja iniciar este ciclo?",
-            options=[
+            colunas_originais = list(df_bruto.columns)
+            c_m1, c_m2, c_m3 = st.columns(3)
+            col_sku = c_m1.selectbox("Coluna de SKU / Código:", colunas_originais, key=f"{key_prefix}_sku")
+            col_qtd = c_m2.selectbox("Coluna de Qtd Inicial / Saldo:", colunas_originais, key=f"{key_prefix}_qtd")
+            col_desc = c_m3.selectbox(
+                "Coluna de Descrição (opcional):",
+                ["(Nenhuma)"] + colunas_originais,
+                key=f"{key_prefix}_desc",
+            )
+
+            if st.button("✅ Confirmar Mapeamento de Colunas", key=f"{key_prefix}_btn"):
+                mapa_manual = {col_sku: "SKU", col_qtd: "Qtd Inicial"}
+                if col_desc != "(Nenhuma)":
+                    mapa_manual[col_desc] = "Descrição"
+                df_norm = _normalizar_colunas_planilha(df_bruto.rename(columns=mapa_manual))
+            else:
+                st.dataframe(df_bruto.head(5), use_container_width=True, hide_index=True)
+                return
+
+        if "SKU" in df_norm.columns and "Qtd Inicial" in df_norm.columns:
+            data_corte_str = ""
+            if "Ref_Data" in df_norm.columns and len(df_norm) > 0:
+                data_corte_str = str(df_norm["Ref_Data"].iloc[0])
+
+            st.session_state["ponto_partida"] = {
+                "origem": origem_label,
+                "data_corte": data_corte_str,
+                "df_base_proximo_ciclo": df_norm,
+            }
+            st.success(f"Planilha carregada com sucesso ({len(df_norm)} SKUs reconhecidos)! Avance para a Etapa 2.")
+            st.dataframe(df_norm.head(15), use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Erro ao ler a planilha: {e}")
+
+
+def _renderizar_etapa_1_ponto_partida():
+    st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Anterior)")
+    st.caption(
+        "Aceita planilhas em qualquer formato (.XLSX, .XLS, .CSV, .ODS) e reconhece automaticamente "
+        "variações nos nomes das colunas (ex: Código/SKU, Saldo/Estoque/Qtd Inicial)."
+    )
+
+    opcao = st.radio(
+        "Como deseja iniciar este ciclo?",
+        options=[
             "Começar do zero (Saldo inicial zerado ou planilha de contagem)",
             "Continuar do ciclo anterior (Subir planilha Base Próximo Ciclo)",
-            ],
-            horizontal=True,
-            )
+        ],
+        horizontal=True,
+    )
+
     if opcao.startswith("Continuar"):
         arq_ciclo = st.file_uploader(
-    "Suba o arquivo do fechamento anterior (.CSV, .XLSX, .XLS ou .ODS):",
-    type=["csv", "xlsx", "xls", "ods"],
-    key="up_ciclo_anterior",
-    )
-    if arq_ciclo is not None:
-        _processar_upload_planilha(arq_ciclo, "ciclo_anterior", "ciclo")
+            "Suba o arquivo do fechamento anterior (.CSV, .XLSX, .XLS ou .ODS):",
+            type=["csv", "xlsx", "xls", "ods"],
+            key="up_ciclo_anterior",
+        )
+        if arq_ciclo is not None:
+            _processar_upload_planilha(arq_ciclo, "ciclo_anterior", "ciclo")
     else:
         col1, col2 = st.columns(2)
-    arq_ini = col1.file_uploader(
-    "Opcional: Planilha de Contagem Inicial (.XLSX, .XLS, .CSV ou .ODS):",
-    type=["csv", "xlsx", "xls", "ods"],
-    key="up_estoque_inicial",
-    )
-    modelo_df = pd.DataFrame(
-    [
-    {"SKU": "7891000100103", "Descrição": "LEITE INTEGRAL 1L", "Categoria": "Laticínios", "Marca": "Marca A", "Qtd Inicial": 48},
-    {"SKU": "7891991010856", "Descrição": "CERVEJA LATA 350ML", "Categoria": "Bebidas", "Marca": "Marca B", "Qtd Inicial": 120},
-    ]
-    )
-    col2.download_button(
-    label="📥 Baixar Modelo de Planilha Inicial (.CSV)",
-    data=modelo_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
-    file_name="modelo_estoque_inicial.csv",
-    mime="text/csv",
-    )
-    if arq_ini is not None:
-        _processar_upload_planilha(arq_ini, "contagem_inicial", "inicial")
-    def _renderizar_etapa_2_xmls():
-        st.header("2. Processamento de XMLs (Entradas e Saídas)")
+        arq_ini = col1.file_uploader(
+            "Opcional: Planilha de Contagem Inicial (.XLSX, .XLS, .CSV ou .ODS):",
+            type=["csv", "xlsx", "xls", "ods"],
+            key="up_estoque_inicial",
+        )
+        modelo_df = pd.DataFrame(
+            [
+                {"SKU": "7891000100103", "Descrição": "LEITE INTEGRAL 1L", "Categoria": "Laticínios", "Marca": "Marca A", "Qtd Inicial": 48},
+                {"SKU": "7891991010856", "Descrição": "CERVEJA LATA 350ML", "Categoria": "Bebidas", "Marca": "Marca B", "Qtd Inicial": 120},
+            ]
+        )
+        col2.download_button(
+            label="📥 Baixar Modelo de Planilha Inicial (.CSV)",
+            data=modelo_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
+            file_name="modelo_estoque_inicial.csv",
+            mime="text/csv",
+        )
+
+        if arq_ini is not None:
+            _processar_upload_planilha(arq_ini, "contagem_inicial", "inicial")
+
+
+def _renderizar_etapa_2_xmls():
+    st.header("2. Processamento de XMLs (Entradas e Saídas)")
     st.caption(
-    "Suba os arquivos XML individuais ou pastas compactadas (.ZIP) das notas de compra (NF-e) e vendas no caixa (NFC-e)."
+        "Suba os arquivos XML individuais ou pastas compactadas (.ZIP) das notas de compra (NF-e) e vendas no caixa (NFC-e)."
     )
+
     c_ent, c_sai = st.columns(2)
     files_entrada = c_ent.file_uploader(
-    "📦 XMLs / ZIPs de ENTRADA (Compras de Fornecedores):",
-    type=["xml", "zip"],
-    accept_multiple_files=True,
-    key="up_xml_entradas",
+        "📦 XMLs / ZIPs de ENTRADA (Compras de Fornecedores):",
+        type=["xml", "zip"],
+        accept_multiple_files=True,
+        key="up_xml_entradas",
     )
     files_saida = c_sai.file_uploader(
-    "🧾 XMLs / ZIPs de SAÍDA (Vendas / NFC-e / NF-e):",
-    type=["xml", "zip"],
-    accept_multiple_files=True,
-    key="up_xml_saidas",
+        "🧾 XMLs / ZIPs de SAÍDA (Vendas / NFC-e / NF-e):",
+        type=["xml", "zip"],
+        accept_multiple_files=True,
+        key="up_xml_saidas",
     )
+
     if st.button("🚀 Processar XMLs e Consolidar Estoque", type="primary", use_container_width=True):
         if not files_entrada and not files_saida:
             st.warning("Envie pelo menos um arquivo XML ou ZIP de entrada ou saída.")
-    return
-    with st.spinner("Lendo notas fiscais e consolidando movimentações..."):
-        todos_itens = []
-    chaves_vistas = set()
-    for arq_nome, arq_bytes in _extrair_arquivos_xml(files_entrada or []):
-        chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
-    if chave and chave not in chaves_vistas:
-        chaves_vistas.add(chave)
-    for it in itens:
-        it["Tipo"] = "Entrada"
-    todos_itens.append(it)
-    for arq_nome, arq_bytes in _extrair_arquivos_xml(files_saida or []):
-        chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
-    if chave and chave not in chaves_vistas:
-        chaves_vistas.add(chave)
-    for it in itens:
-        it["Tipo"] = "Saída"
-    todos_itens.append(it)
-    if not todos_itens:
-        st.error("Nenhum item válido encontrado nos XMLs enviados.")
-    return
-df_movs = pd.DataFrame(todos_itens)
-# 0. Garante que não haja itens duplicados na mesma nota fiscal
-if "Item" in df_movs.columns and "Chave_NFe" in df_movs.columns:
-    df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Item"], keep="first")
-# Padroniza SKU antes de qualquer agrupamento
-df_movs["SKU"] = df_movs["SKU"].astype(str).str.strip()
-# 1. Consolida por SKU (1 linha única por SKU)
-entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
-Total_Entradas=("Quantidade", "sum"),
-Valor_Entradas=("Valor_Total", "sum"),
-Custo_Unitario=("Valor_Unitario", "mean"),
-)
-saidas = df_movs[df_movs["Tipo"] == "Saída"].groupby("SKU", as_index=False).agg(
-Total_Saidas=("Quantidade", "sum"),
-Valor_Saidas=("Valor_Total", "sum"),
-Preco_Venda=("Valor_Unitario", "mean"),
-Ultima_Saida=("Data_Emissao", "max"),
-)
-cadastro = df_movs.groupby("SKU", as_index=False).agg(
-Descrição=("Descrição", "first"),
-)
-df_cons = cadastro.merge(entradas, on="SKU", how="left").merge(saidas, on="SKU", how="left")
-for col_num in ["Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas", "Valor_Saidas", "Preco_Venda"]:
-    df_cons[col_num] = df_cons[col_num].fillna(0.0)
-df_cons["Categoria"] = "Geral"
-df_cons["Marca"] = "Sem Marca"
-df_cons["Qtd Inicial"] = 0.0
-df_cons["Fator_Conversao"] = 1.0
-# 2. Aplica ponto de partida se existir (SEM duplicar SKUs!)
-snap = st.session_state.get("ponto_partida")
-if snap and "df_base_proximo_ciclo" in snap:
-    df_ref = snap["df_base_proximo_ciclo"].copy()
-df_ref["SKU"] = df_ref["SKU"].astype(str).str.strip()
-agg_ref = {}
-if "Qtd Inicial" in df_ref.columns:
-    agg_ref["Qtd Inicial"] = "sum"
-if "Categoria" in df_ref.columns:
-    agg_ref["Categoria"] = "first"
-if "Marca" in df_ref.columns:
-    agg_ref["Marca"] = "first"
-if "Fator_Conversao" in df_ref.columns:
-    agg_ref["Fator_Conversao"] = "first"
-if "Descrição" in df_ref.columns:
-    agg_ref["Descrição"] = "first"
-df_ref_unico = df_ref.groupby("SKU", as_index=False).agg(agg_ref)
-cols_merge = [
-c for c in ["SKU", "Qtd Inicial", "Categoria", "Marca", "Fator_Conversao", "Descrição"]
-if c in df_ref_unico.columns
-]
-df_cons = df_cons.drop(columns=[c for c in cols_merge if c != "SKU" and c != "Descrição" and c in df_cons.columns])
-df_cons = df_cons.merge(df_ref_unico[cols_merge], on="SKU", how="right")
-if "Descrição_x" in df_cons.columns and "Descrição_y" in df_cons.columns:
-    df_cons["Descrição"] = df_cons["Descrição_x"].fillna(df_cons["Descrição_y"])
-df_cons = df_cons.drop(columns=["Descrição_x", "Descrição_y"])
-df_cons["Descrição"] = df_cons["Descrição"].fillna("Item do Saldo Inicial")
-for col_num in ["Qtd Inicial", "Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas", "Valor_Saidas", "Preco_Venda"]:
-    if col_num in df_cons.columns:
-        df_cons[col_num] = df_cons[col_num].fillna(0.0)
-df_cons["Categoria"] = df_cons["Categoria"].fillna("Geral")
-df_cons["Marca"] = df_cons["Marca"].fillna("Sem Marca")
-df_cons["Fator_Conversao"] = df_cons["Fator_Conversao"].fillna(1.0)
-df_movs = df_movs[df_movs["SKU"].isin(df_ref_unico["SKU"])].copy()
-# 3. Trava final de segurança: garante 1 única linha por SKU e calcula o saldo exato
-df_cons = df_cons.drop_duplicates(subset=["SKU"], keep="first").reset_index(drop=True)
-df_cons["Saldo_Calculado"] = df_cons["Qtd Inicial"] + df_cons["Total_Entradas"] - df_cons["Total_Saidas"]
-for k_bak in ["_Backup_Movs_Original", "_Backup_Consolidado_Original"]:
-    if k_bak in st.session_state:
-        del st.session_state[k_bak]
-        st.session_state["df_xml_consolidado"] = df_cons
-        st.session_state["df_movs_detalhadas"] = df_movs
-        st.session_state["chaves_xml_lidas"] = chaves_vistas
-st.success(
-f"Processamento concluído! {len(chaves_vistas)} notas fiscais lidas e {len(df_cons)} SKUs consolidados."
-)
-if not st.session_state["df_xml_consolidado"].empty:
-    df_exib = st.session_state["df_xml_consolidado"]
-m1, m2, m3 = st.columns(3)
-m1.metric("Notas Fiscais Lidas", len(st.session_state["chaves_xml_lidas"]))
-m2.metric("SKUs Consolidados", len(df_exib))
-m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
-st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
+            return
+
+        with st.spinner("Lendo notas fiscais e consolidando movimentações..."):
+            todos_itens = []
+            chaves_vistas = set()
+
+            for arq_nome, arq_bytes in _extrair_arquivos_xml(files_entrada or []):
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                if chave and chave not in chaves_vistas:
+                    chaves_vistas.add(chave)
+                    for it in itens:
+                        it["Tipo"] = "Entrada"
+                        todos_itens.append(it)
+
+            for arq_nome, arq_bytes in _extrair_arquivos_xml(files_saida or []):
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                if chave and chave not in chaves_vistas:
+                    chaves_vistas.add(chave)
+                    for it in itens:
+                        it["Tipo"] = "Saída"
+                        todos_itens.append(it)
+
+            if not todos_itens:
+                st.error("Nenhum item válido encontrado nos XMLs enviados.")
+                return
+
+            df_movs = pd.DataFrame(todos_itens)
+
+            # 0. Garante que não haja itens duplicados na mesma nota fiscal
+            if "Item" in df_movs.columns and "Chave_NFe" in df_movs.columns:
+                df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Item"], keep="first")
+
+            # Padroniza SKU antes de qualquer agrupamento
+            df_movs["SKU"] = df_movs["SKU"].astype(str).str.strip()
+
+            # 1. Consolida por SKU (1 linha única por SKU)
+            entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
+                Total_Entradas=("Quantidade", "sum"),
+                Valor_Entradas=("Valor_Total", "sum"),
+                Custo_Unitario=("Valor_Unitario", "mean"),
+            )
+            saidas = df_movs[df_movs["Tipo"] == "Saída"].groupby("SKU", as_index=False).agg(
+                Total_Saidas=("Quantidade", "sum"),
+                Valor_Saidas=("Valor_Total", "sum"),
+                Preco_Venda=("Valor_Unitario", "mean"),
+                Ultima_Saida=("Data_Emissao", "max"),
+            )
+            cadastro = df_movs.groupby("SKU", as_index=False).agg(
+                Descrição=("Descrição", "first"),
+            )
+
+            df_cons = cadastro.merge(entradas, on="SKU", how="left").merge(saidas, on="SKU", how="left")
+            for col_num in ["Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas", "Valor_Saidas", "Preco_Venda"]:
+                df_cons[col_num] = df_cons[col_num].fillna(0.0)
+
+            df_cons["Categoria"] = "Geral"
+            df_cons["Marca"] = "Sem Marca"
+            df_cons["Qtd Inicial"] = 0.0
+            df_cons["Fator_Conversao"] = 1.0
+
+            # 2. Aplica ponto de partida se existir (SEM duplicar SKUs!)
+            snap = st.session_state.get("ponto_partida")
+            if snap and "df_base_proximo_ciclo" in snap:
+                df_ref = snap["df_base_proximo_ciclo"].copy()
+                df_ref["SKU"] = df_ref["SKU"].astype(str).str.strip()
+
+                agg_ref = {}
+                if "Qtd Inicial" in df_ref.columns:
+                    agg_ref["Qtd Inicial"] = "sum"
+                if "Categoria" in df_ref.columns:
+                    agg_ref["Categoria"] = "first"
+                if "Marca" in df_ref.columns:
+                    agg_ref["Marca"] = "first"
+                if "Fator_Conversao" in df_ref.columns:
+                    agg_ref["Fator_Conversao"] = "first"
+                if "Descrição" in df_ref.columns:
+                    agg_ref["Descrição"] = "first"
+
+                df_ref_unico = df_ref.groupby("SKU", as_index=False).agg(agg_ref)
+
+                cols_merge = [
+                    c for c in ["SKU", "Qtd Inicial", "Categoria", "Marca", "Fator_Conversao", "Descrição"]
+                    if c in df_ref_unico.columns
+                ]
+                df_cons = df_cons.drop(columns=[c for c in cols_merge if c != "SKU" and c != "Descrição" and c in df_cons.columns])
+
+                df_cons = df_cons.merge(df_ref_unico[cols_merge], on="SKU", how="right")
+
+                if "Descrição_x" in df_cons.columns and "Descrição_y" in df_cons.columns:
+                    df_cons["Descrição"] = df_cons["Descrição_x"].fillna(df_cons["Descrição_y"])
+                    df_cons = df_cons.drop(columns=["Descrição_x", "Descrição_y"])
+                df_cons["Descrição"] = df_cons["Descrição"].fillna("Item do Saldo Inicial")
+
+                for col_num in ["Qtd Inicial", "Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas", "Valor_Saidas", "Preco_Venda"]:
+                    if col_num in df_cons.columns:
+                        df_cons[col_num] = df_cons[col_num].fillna(0.0)
+                df_cons["Categoria"] = df_cons["Categoria"].fillna("Geral")
+                df_cons["Marca"] = df_cons["Marca"].fillna("Sem Marca")
+                df_cons["Fator_Conversao"] = df_cons["Fator_Conversao"].fillna(1.0)
+
+                df_movs = df_movs[df_movs["SKU"].isin(df_ref_unico["SKU"])].copy()
+
+            # 3. Trava final de segurança: garante 1 única linha por SKU e calcula o saldo exato
+            df_cons = df_cons.drop_duplicates(subset=["SKU"], keep="first").reset_index(drop=True)
+            df_cons["Saldo_Calculado"] = df_cons["Qtd Inicial"] + df_cons["Total_Entradas"] - df_cons["Total_Saidas"]
+
+            for k_bak in ["_Backup_Movs_Original", "_Backup_Consolidado_Original"]:
+                if k_bak in st.session_state:
+                    del st.session_state[k_bak]
+
+            st.session_state["df_xml_consolidado"] = df_cons
+            st.session_state["df_movs_detalhadas"] = df_movs
+            st.session_state["chaves_xml_lidas"] = chaves_vistas
+
+            st.success(
+                f"Processamento concluído! {len(chaves_vistas)} notas fiscais lidas e {len(df_cons)} SKUs consolidados."
+            )
+
+    if not st.session_state["df_xml_consolidado"].empty:
+        df_exib = st.session_state["df_xml_consolidado"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Notas Fiscais Lidas", len(st.session_state["chaves_xml_lidas"]))
+        m2.metric("SKUs Consolidados", len(df_exib))
+        m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
+        st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
+
+
 def main():
     _inicializar_estado()
-with st.sidebar:
-    st.title("🛒 Varejo Inteligente")
-st.caption("Copiloto de Compras e Prevenção de Ruptura")
-st.divider()
-loja_nome = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
-st.info(
-"Fluxo Recomendado:\n"
-"1. Defina o Ponto de Partida\n"
-"2. Processe os XMLs\n"
-"3. Ajuste Caixas → Unidades\n"
-"4. Analise Compras e Rupturas"
-)
-st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
-nomes_abas = [
-"1. Ponto de Partida",
-"2. Processar XMLs",
-"3. De-Para (Conversão CX→UN)",
-"4. Indicadores e Kardex",
-]
-if TEM_ABA_ENTRADAS_SAIDAS:
-    nomes_abas.append("5. Entradas x Saídas")
-if TEM_ABA_COLETA:
-    nomes_abas.append("6. Coleta Rápida")
-abas = st.tabs(nomes_abas)
-with abas:
-    _renderizar_etapa_1_ponto_partida()
-with abas:
-    _renderizar_etapa_2_xmls()
-with abas:
-    renderizar_aba_conversao()
-with abas:
-    renderizar_aba_indicadores()
-idx_extra = 4
-if TEM_ABA_ENTRADAS_SAIDAS:
-    with abas[idx_extra]:
-        renderizar_aba_entradas_saidas()
-idx_extra += 1
-if TEM_ABA_COLETA:
-    with abas[idx_extra]:
-        renderizar_aba_coleta()
-if name == "main":
+
+    with st.sidebar:
+        st.title("🛒 Varejo Inteligente")
+        st.caption("Copiloto de Compras e Prevenção de Ruptura")
+        st.divider()
+        loja_nome = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
+        st.info(
+            "**Fluxo Recomendado:**\n"
+            "1. Defina o Ponto de Partida\n"
+            "2. Processe os XMLs\n"
+            "3. Ajuste Caixas → Unidades\n"
+            "4. Analise Compras e Rupturas"
+        )
+
+    st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
+
+    nomes_abas = [
+        "1. Ponto de Partida",
+        "2. Processar XMLs",
+        "3. De-Para (Conversão CX→UN)",
+        "4. Indicadores e Kardex",
+    ]
+    if TEM_ABA_ENTRADAS_SAIDAS:
+        nomes_abas.append("5. Entradas x Saídas")
+    if TEM_ABA_COLETA:
+        nomes_abas.append("6. Coleta Rápida")
+
+    abas = st.tabs(nomes_abas)
+
+    with abas[0]:
+        _renderizar_etapa_1_ponto_partida()
+
+    with abas[1]:
+        _renderizar_etapa_2_xmls()
+
+    with abas[2]:
+        renderizar_aba_conversao()
+
+    with abas[3]:
+        renderizar_aba_indicadores()
+
+    idx_extra = 4
+    if TEM_ABA_ENTRADAS_SAIDAS:
+        with abas[idx_extra]:
+            renderizar_aba_entradas_saidas()
+        idx_extra += 1
+
+    if TEM_ABA_COLETA:
+        with abas[idx_extra]:
+            renderizar_aba_coleta()
+
+
+if __name__ == "__main__":
     main()
