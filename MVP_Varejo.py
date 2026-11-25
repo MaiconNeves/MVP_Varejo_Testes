@@ -28,7 +28,98 @@ def _inicializar_estado():
     for chave, valor in defaults.items():
         if chave not in st.session_state:
             st.session_state[chave] = valor
+def _limpar_texto_coluna(nome: str) -> str:
+    """Remove acentos, espaços extras e deixa tudo em minúsculo para comparação."""
+    texto = str(nome).strip().lower()
+    texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("utf-8")
+    for ch in ["-", "/", ".", "(", ")", ":"]:
+        texto = texto.replace(ch, " ")
+    return "_".join(texto.split())
+def _carregar_planilha_universal(arquivo) -> pd.DataFrame:
+    """Lê planilhas em qualquer formato (.xlsx, .xls, .ods, .csv, .txt)."""
+    nome = arquivo.name.lower()
+    dados = arquivo.read()
 
+    if nome.endswith((".xlsx", ".xls", ".ods")):
+        return pd.read_excel(io.BytesIO(dados))
+
+    # Tenta ler CSV/TXT com diferentes encodings comuns no Brasil
+    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+        try:
+            texto = dados.decode(enc)
+            return pd.read_csv(io.StringIO(texto), sep=None, engine="python")
+        except Exception:
+            continue
+
+    raise ValueError("Não foi possível decodificar o arquivo. Salve como .xlsx ou .csv (UTF-8).")
+
+
+def _normalizar_colunas_planilha(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Renomeia automaticamente colunas com nomes variados para o padrão do sistema:
+    SKU, Descrição, Qtd Inicial, Categoria, Marca, Fator_Conversao, Ref_Data.
+    """
+    df = df_raw.copy()
+
+    # Dicionário de sinônimos aceitos (já normalizados sem acento/minúsculo)
+    mapa_sinonimos = {
+        "SKU": {
+            "sku", "codigo", "cod", "cod_produto", "codigo_produto", "cprod",
+            "ean", "gtin", "cean", "cod_barras", "codigo_de_barras", "id_produto", "item_id"
+        },
+        "Descrição": {
+            "descricao", "produto", "nome", "nome_produto", "xprod", "item",
+            "mercadoria", "desc", "descricao_produto", "titulo"
+        },
+        "Qtd Inicial": {
+            "qtd_inicial", "qtde_inicial", "quantidade_inicial", "saldo_inicial",
+            "estoque_inicial", "estoque", "saldo", "qtd", "qtde", "quantidade",
+            "qtd_fisica", "qtde_fisica", "estoque_atual", "saldo_atual", "fisico", "contagem"
+        },
+        "Categoria": {
+            "categoria", "depto", "departamento", "secao", "grupo", "familia", "linha"
+        },
+        "Marca": {
+            "marca", "fabricante", "fornecedor", "brand"
+        },
+        "Fator_Conversao": {
+            "fator_conversao", "fator", "conversao", "qtd_cx", "un_cx", "embalagem", "multiplo"
+        },
+        "Ref_Data": {
+            "ref_data", "data_ref", "data_corte", "data", "data_inventario", "data_contagem"
+        },
+    }
+
+    renomear = {}
+    colunas_ja_mapeadas = set()
+
+    for col_original in df.columns:
+        col_norm = _limpar_texto_coluna(col_original)
+        for destino, sinonimos in mapa_sinonimos.items():
+            if destino not in colunas_ja_mapeadas and col_norm in sinonimos:
+                renomear[col_original] = destino
+                colunas_ja_mapeadas.add(destino)
+                break
+
+    df = df.rename(columns=renomear)
+
+    # Limpa valores numéricos na Qtd Inicial (ex: "1.200,50" -> 1200.50)
+    if "Qtd Inicial" in df.columns:
+        if df["Qtd Inicial"].dtype == object:
+            df["Qtd Inicial"] = (
+                df["Qtd Inicial"]
+                .astype(str)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+            )
+        df["Qtd Inicial"] = pd.to_numeric(df["Qtd Inicial"], errors="coerce").fillna(0.0)
+
+    if "SKU" in df.columns:
+        df["SKU"] = df["SKU"].astype(str).str.strip()
+        # Remove linhas vazias ou 'nan'
+        df = df[df["SKU"].notna() & (df["SKU"] != "") & (df["SKU"].str.lower() != "nan")]
+
+    return df
 
 def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | None, list[dict]]:
     """
