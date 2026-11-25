@@ -28,6 +28,7 @@ def _inicializar_estado():
     for chave, valor in defaults.items():
         if chave not in st.session_state:
             st.session_state[chave] = valor
+
 def _limpar_texto_coluna(nome: str) -> str:
     """Remove acentos, espaços extras e deixa tudo em minúsculo para comparação."""
     texto = str(nome).strip().lower()
@@ -35,6 +36,7 @@ def _limpar_texto_coluna(nome: str) -> str:
     for ch in ["-", "/", ".", "(", ")", ":"]:
         texto = texto.replace(ch, " ")
     return "_".join(texto.split())
+	
 def _carregar_planilha_universal(arquivo) -> pd.DataFrame:
     """Lê planilhas em qualquer formato (.xlsx, .xls, .ods, .csv, .txt)."""
     nome = arquivo.name.lower()
