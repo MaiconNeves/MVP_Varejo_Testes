@@ -682,49 +682,41 @@ def renderizar_aba_indicadores():
     df_acao = df_ind[df_ind["Curva_ABC"].isin(filtro_curva)].copy()
     if busca_simples.strip():
         termo = busca_simples.strip().lower()
-    df_acao = df_acao[
-    df_acao["SKU"].str.lower().str.contains(termo, na=False)
-    | df_acao["Descrição"].astype(str).str.lower().str.contains(termo, na=False)
-    ]
+        df_acao = df_acao[
+            df_acao["SKU"].astype(str).str.lower().str.contains(termo, na=False, regex=False)
+            | df_acao["Descrição"].astype(str).str.lower().str.contains(termo, na=False, regex=False)
+        ]
+
     if visao_acao.startswith("🔴"):
         df_acao = df_acao[df_acao["Sugestao_Compra"] > 0].sort_values(
-        by=["Curva_ABC", "Perda_Financeira_Hist", "Sugestao_Compra"],
-        ascending=[True, False, False],
+            by=["Curva_ABC", "Perda_Financeira_Hist", "Sugestao_Compra"],
+            ascending=[True, False, False],
         )
         st.subheader(f"🛒 Pedido de Compra Sugerido ({len(df_acao)} itens)")
         st.caption(
-        "Quantidades calculadas conforme os dias de cobertura definidos para cada categoria."
+            "Quantidades calculadas conforme os dias de cobertura definidos para cada categoria."
         )
-    elif visao_acao.startswith("🔵"):
-        df_acao = df_acao[
-            df_acao["Status_Estoque"].isin(["🔵 Excesso", "⚪ Sem Saída no Período"])
-            & (df_acao["Saldo_Calculado"] > 0)
-            ].sort_values(by="Valor_Estoque_Atual", ascending=False)
-        st.subheader(f"🏷️ Itens para Promoção / Queima de Estoque ({len(df_acao)} itens)")
-        st.caption(
-        "Produtos que ultrapassaram o limite de dias de excesso da sua categoria ou sem venda no período."
-    )
     else:
         st.subheader(f"📋 Visão Geral dos Produtos ({len(df_acao)} itens)")
-    if df_acao.empty:
-        st.success("Nenhum produto enquadrado neste filtro no momento!")
-    else:
-        df_exib_comprador = df_acao.copy()
-    df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
-    df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
-    df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
-    cols_simples = [
-    "Status_Estoque",
-    "Curva_ABC",
-    "Categoria",
-    "SKU",
-    "Descrição",
-    "Saldo_Exib",
-    "DMD_Exib",
-    "Previsao_Ruptura",
-    "Compra_Exib",
-    "Investimento_Compra_RS",
-    ]
+        if df_acao.empty:
+            st.success("Nenhum produto enquadrado neste filtro no momento!")
+        else:
+			df_exib_comprador = df_acao.copy()
+			df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
+			df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
+			df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
+			cols_simples = [
+			"Status_Estoque",
+			"Curva_ABC",
+			"Categoria",
+			"SKU",
+			"Descrição",
+			"Saldo_Exib",
+			"DMD_Exib",
+			"Previsao_Ruptura",
+			"Compra_Exib",
+			"Investimento_Compra_RS",
+			]
     st.dataframe(
     df_exib_comprador[cols_simples].rename(
     columns={
