@@ -28,7 +28,7 @@ def _inicializar_estado():
     for chave, valor in defaults.items():
         if chave not in st.session_state:
             st.session_state[chave] = valor
-
+			
 def _limpar_texto_coluna(nome: str) -> str:
     """Remove acentos, espaços extras e deixa tudo em minúsculo para comparação."""
     texto = str(nome).strip().lower()
@@ -38,23 +38,29 @@ def _limpar_texto_coluna(nome: str) -> str:
     return "_".join(texto.split())
 	
 def _carregar_planilha_universal(arquivo) -> pd.DataFrame:
-    """Lê planilhas em qualquer formato (.xlsx, .xls, .ods, .csv, .txt)."""
+    """Lê planilhas em qualquer formato (.xlsx, .xls, .ods, .csv, .txt) blindado para Excel BR."""
     nome = arquivo.name.lower()
     dados = arquivo.read()
 
     if nome.endswith((".xlsx", ".xls", ".ods")):
         return pd.read_excel(io.BytesIO(dados))
 
-    # Tenta ler CSV/TXT com diferentes encodings comuns no Brasil
     for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
         try:
             texto = dados.decode(enc)
-            return pd.read_csv(io.StringIO(texto), sep=None, engine="python")
+            # Detecta o separador olhando a primeira linha (cabeçalho)
+            primeira_linha = texto.splitlines() if texto.splitlines() else ""
+            if ";" in primeira_linha:
+                sep = ";"
+            elif "\t" in primeira_linha:
+                sep = "\t"
+            else:
+                sep = ","
+            return pd.read_csv(io.StringIO(texto), sep=sep)
         except Exception:
             continue
 
-    raise ValueError("Não foi possível decodificar o arquivo. Salve como .xlsx ou .csv (UTF-8).")
-
+    raise ValueError("Não foi possível decodificar o arquivo. Salve como .xlsx ou .csv.")
 
 def _normalizar_colunas_planilha(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
