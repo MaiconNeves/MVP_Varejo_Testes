@@ -1,8 +1,7 @@
-from datetime import datetime
 import io
 import zipfile
 import xml.etree.ElementTree as ET
-import numpy as np
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 
@@ -11,107 +10,61 @@ from aba_indicadores import renderizar_aba_indicadores
 
 
 st.set_page_config(
-    page_title="MVP Varejo Inteligente — Estoque & Compras",
+    page_title="Varejo Inteligente | Copiloto de Compras e Estoque",
     page_icon="🛒",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
-def _ler_csv_inteligente(arquivo) -> pd.DataFrame:
-    """Lê arquivos CSV gerados pelo Excel brasileiro (cp1252/latin1) ou UTF-8, detectando separador automaticamente."""
-    raw_bytes = arquivo.getvalue()
-    encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
-    separadores = [";", ",", "\t"]
-
-    melhor_df = None
-    for enc in encodings:
-        try:
-            texto = raw_bytes.decode(enc)
-        except UnicodeDecodeError:
-            continue
-
-        linhas = [l.strip() for l in texto.splitlines() if l.strip()]
-        if not linhas:
-            continue
-
-        # Detecta qual separador aparece mais na primeira linha útil
-        primeira_linha = linhas[0]
-        sep_detectado = max(separadores, key=lambda s: primeira_linha.count(s))
-
-        try:
-            df_teste = pd.read_csv(
-                io.StringIO(texto),
-                sep=sep_detectado,
-                engine="python",
-                skip_blank_lines=True,
-            )
-            df_teste.columns = [str(c).strip() for c in df_teste.columns]
-            if len(df_teste.columns) >= 2:
-                melhor_df = df_teste
-                break
-        except Exception:
-            continue
-
-    if melhor_df is None:
-        raise ValueError("Não foi possível identificar as colunas do CSV. Verifique se o arquivo não está corrompido.")
-
-    # Mapeamento automático de sinônimos comuns em planilhas de supermercado
-    mapa_sinonimos = {}
-    for col in melhor_df.columns:
-        c_low = col.lower().strip()
-        if c_low in {"sku", "codigo", "código", "cod", "cód", "ean", "gtin", "cod_produto", "codigo_produto", "id"}:
-            if "SKU" not in melhor_df.columns and "SKU" not in mapa_sinonimos.values():
-                mapa_sinonimos[col] = "SKU"
-        elif c_low in {"qtd inicial", "qtd_inicial", "quantidade", "qtd", "estoque", "estoque inicial", "estoque_inicial", "saldo", "saldo inicial", "saldo_inicial"}:
-            if "Qtd Inicial" not in melhor_df.columns and "Qtd Inicial" not in mapa_sinonimos.values():
-                mapa_sinonimos[col] = "Qtd Inicial"
-        elif c_low in {"descrição", "descricao", "produto", "nome", "item", "nome_produto"}:
-            if "Descrição" not in melhor_df.columns and "Descrição" not in mapa_sinonimos.values():
-                mapa_sinonimos[col] = "Descrição"
-        elif c_low in {"categoria", "grupo", "secao", "seção", "departamento"}:
-            if "Categoria" not in melhor_df.columns and "Categoria" not in mapa_sinonimos.values():
-                mapa_sinonimos[col] = "Categoria"
-        elif c_low in {"marca", "fabricante", "fornecedor"}:
-            if "Marca" not in melhor_df.columns and "Marca" not in mapa_sinonimos.values():
-                mapa_sinonimos[col] = "Marca"
-
-    if mapa_sinonimos:
-        melhor_df = melhor_df.rename(columns=mapa_sinonimos)
-
-    return melhor_df
+def _inicializar_estado():
+    """Garante que todas as chaves necessárias existam no st.session_state."""
+    defaults = {
+        "ponto_partida": None,
+        "df_xml_consolidado": pd.DataFrame(),
+        "df_movs_detalhadas": pd.DataFrame(),
+        "chaves_xml_lidas": set(),
+    }
+    for chave, valor in defaults.items():
+        if chave not in st.session_state:
+            st.session_state[chave] = valor
 
 
-def _extrair_itens_xml(conteudo_xml: bytes, tipo_forcado: str | None = None) -> list[dict]:
-    """Extrai itens de NF-e (modelo 55) ou NFC-e (modelo 65) a partir do conteúdo XML."""
-    registros = []
+def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | None, list[dict]]:
+    """
+    Faz o parsing básico de um arquivo XML de NF-e (mod 55) ou NFC-e (mod 65).
+    Retorna (chave_acesso, lista_de_itens_movimentados).
+    """
     try:
-        root = ET.fromstring(conteudo_xml)
+        root = ET.fromstring(conteudo_bytes)
     except ET.ParseError:
-        return registros
+        return None, []
 
-    # Remove namespaces para facilitar a busca de tags
+    # Remove namespaces para facilitar a busca das tags
     for elem in root.iter():
         if "}" in elem.tag:
             elem.tag = elem.tag.split("}", 1)[1]
 
     inf_nfe = root.find(".//infNFe")
     if inf_nfe is None:
-        return registros
+        return None, []
+
+    chave_acesso = inf_nfe.attrib.get("Id", "").replace("NFe", "").strip()
+    if not chave_acesso:
+        chave_acesso = nome_arquivo
 
     ide = inf_nfe.find("ide")
     tp_nf = ide.findtext("tpNF", default="1") if ide is not None else "1"
     mod = ide.findtext("mod", default="55") if ide is not None else "55"
     dh_emi = ide.findtext("dhEmi") or ide.findtext("dEmi") or ""
-    data_emissao = dh_emi[:10] if len(dh_emi) >= 10 else ""
+    data_emissao = dh_emi[:10] if len(dh_emi) >= 10 else datetime.now().strftime("%Y-%m-%d")
 
-    if tipo_forcado:
-        tipo_mov = tipo_forcado
-    else:
-        if mod == "65":
-            tipo_mov = "Saída"
-        else:
-            tipo_mov = "Entrada" if tp_nf == "0" else "Saída"
+    # Regra padrão: NFC-e (mod 65) é sempre Saída (venda no caixa).
+    # NF-e (mod 55): tpNF == "0" é Entrada; se vier de fornecedor (tpNF == "1" emitida por terceiro),
+    # o usuário também pode forçar o tipo na tela de upload.
+    tipo_mov = "Saída" if (mod == "65" or tp_nf == "1") else "Entrada"
 
+    itens = []
     for det in inf_nfe.findall("det"):
         prod = det.find("prod")
         if prod is None:
@@ -119,173 +72,317 @@ def _extrair_itens_xml(conteudo_xml: bytes, tipo_forcado: str | None = None) -> 
 
         c_ean = (prod.findtext("cEAN") or "").strip()
         c_prod = (prod.findtext("cProd") or "").strip()
-        sku = c_ean if (c_ean and c_ean.upper() != "SEM GTIN" and c_ean != "0") else c_prod
+        # Prioriza EAN válido como SKU unificado para cruzar entrada e saída
+        sku = c_ean if (c_ean and c_ean.upper() != "SEM GTIN" and len(c_ean) >= 8) else c_prod
         if not sku:
             continue
 
-        x_prod = (prod.findtext("xProd") or "Produto sem descrição").strip()
+        descricao = (prod.findtext("xProd") or "Produto sem descrição").strip()
         u_com = (prod.findtext("uCom") or "UN").strip().upper()
         q_com = float(prod.findtext("qCom") or 0.0)
         v_un_com = float(prod.findtext("vUnCom") or 0.0)
-        v_prod = float(prod.findtext("vProd") or (q_com * v_un_com))
+        v_prod = float(prod.findtext("vProd") or 0.0)
 
-        registros.append(
+        itens.append(
             {
-                "SKU": sku,
-                "Codigo_Interno_XML": c_prod,
-                "EAN_XML": c_ean,
-                "Descrição": x_prod,
-                "Unidade": u_com,
+                "Chave_NFe": chave_acesso,
+                "Modelo": mod,
                 "Tipo": tipo_mov,
                 "Data_Emissao": data_emissao,
+                "Data": data_emissao,
+                "SKU": sku,
+                "Codigo_Fornecedor": c_prod,
+                "EAN": c_ean,
+                "Descrição": descricao,
+                "Unidade": u_com,
                 "Quantidade": q_com,
                 "Valor_Unitario": v_un_com,
                 "Valor_Total": v_prod,
             }
         )
 
-    return registros
+    return chave_acesso, itens
 
 
-def _processar_arquivos_upload(arquivos, tipo_forcado: str | None = None) -> pd.DataFrame:
-    """Lê múltiplos arquivos .XML ou .ZIP contendo XMLs e retorna DataFrame consolidado de movimentos."""
-    todos_itens = []
-    for arq in arquivos:
+def _extrair_arquivos_xml(arquivos_enviados) -> list[tuple[str, bytes]]:
+    """Extrai arquivos .xml individuais ou de dentro de pacotes .zip."""
+    xmls = []
+    for arq in arquivos_enviados:
         nome = arq.name.lower()
         dados = arq.read()
-        if nome.endswith(".zip"):
+        if nome.endswith(".xml"):
+            xmls.append((arq.name, dados))
+        elif nome.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(dados)) as zf:
+                for item_zip in zf.namelist():
+                    if item_zip.lower().endswith(".xml") and not item_zip.startswith("__MACOSX"):
+                        xmls.append((item_zip, zf.read(item_zip)))
+    return xmls
+
+
+def _renderizar_etapa_1_ponto_partida():
+    st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Anterior)")
+    st.caption(
+        "Informe o saldo inicial da loja (contagem inicial) ou suba a planilha de fechamento do ciclo anterior "
+        "para dar continuidade ao histórico."
+    )
+
+    opcao = st.radio(
+        "Como deseja iniciar este ciclo?",
+        options=[
+            "Começar do zero (Saldo inicial zerado ou planilha de contagem)",
+            "Continuar do ciclo anterior (Subir planilha Base Próximo Ciclo)",
+        ],
+        horizontal=True,
+    )
+
+    if opcao.startswith("Continuar"):
+        arq_ciclo = st.file_uploader(
+            "Suba o arquivo CSV gerado no fechamento anterior (base_proximo_ciclo_*.csv):",
+            type=["csv"],
+            key="up_ciclo_anterior",
+        )
+        if arq_ciclo is not None:
             try:
-                with zipfile.ZipFile(io.BytesIO(dados)) as zf:
-                    for item_zip in zf.namelist():
-                        if item_zip.lower().endswith(".xml") and not item_zip.startswith("__MACOSX"):
-                            todos_itens.extend(_extrair_itens_xml(zf.read(item_zip), tipo_forcado))
-            except zipfile.BadZipFile:
-                st.warning(f"Arquivo ZIP inválido ignorado: {arq.name}")
-        elif nome.endswith(".xml"):
-            todos_itens.extend(_extrair_itens_xml(dados, tipo_forcado))
-
-    if not todos_itens:
-        return pd.DataFrame()
-    return pd.DataFrame(todos_itens)
-
-
-def _consolidar_base(df_movs: pd.DataFrame, df_partida: pd.DataFrame | None) -> pd.DataFrame:
-    """Cruza o ponto de partida (estoque inicial ou ciclo anterior) com as entradas e saídas dos XMLs."""
-    base_inicial = pd.DataFrame(columns=["SKU", "Descrição", "Categoria", "Marca", "Qtd Inicial", "Fator_Conversao"])
-    if df_partida is not None and not df_partida.empty:
-        base_inicial = df_partida.copy()
-        base_inicial["SKU"] = base_inicial["SKU"].astype(str).str.strip()
-        if "Qtd Inicial" not in base_inicial.columns:
-            base_inicial["Qtd Inicial"] = 0.0
-        base_inicial["Qtd Inicial"] = pd.to_numeric(base_inicial["Qtd Inicial"], errors="coerce").fillna(0.0)
-        if "Fator_Conversao" not in base_inicial.columns:
-            base_inicial["Fator_Conversao"] = 1.0
-
-    if df_movs.empty:
-        df_res = base_inicial.copy()
-        df_res["Total_Entradas"] = 0.0
-        df_res["Total_Saidas"] = 0.0
-        df_res["Valor_Entradas"] = 0.0
-        df_res["Valor_Saidas"] = 0.0
-        df_res["Custo_Unitario"] = 0.0
-        df_res["Preco_Venda"] = 0.0
-        df_res["Saldo_Calculado"] = df_res["Qtd Inicial"]
-        return df_res
-
-    df_m = df_movs.copy()
-    df_m["SKU"] = df_m["SKU"].astype(str).str.strip()
-
-    entradas = (
-        df_m[df_m["Tipo"] == "Entrada"]
-        .groupby("SKU", as_index=False)
-        .agg(
-            Total_Entradas=("Quantidade", "sum"),
-            Valor_Entradas=("Valor_Total", "sum"),
-            Desc_Ent=("Descrição", "first"),
+                df_ref = pd.read_csv(arq_ciclo, sep=None, engine="python")
+                if "SKU" in df_ref.columns and "Qtd Inicial" in df_ref.columns:
+                    df_ref["SKU"] = df_ref["SKU"].astype(str).str.strip()
+                    st.session_state["ponto_partida"] = {
+                        "origem": "ciclo_anterior",
+                        "data_corte": str(df_ref["Ref_Data"].iloc[0]) if "Ref_Data" in df_ref.columns else "",
+                        "df_base_proximo_ciclo": df_ref,
+                    }
+                    st.success(f"Ciclo anterior carregado com {len(df_ref)} SKUs! Avance para a Etapa 2.")
+                    st.dataframe(df_ref.head(15), use_container_width=True, hide_index=True)
+                else:
+                    st.error("O arquivo precisa conter as colunas 'SKU' e 'Qtd Inicial'.")
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo de ciclo: {e}")
+    else:
+        col1, col2 = st.columns(2)
+        arq_ini = col1.file_uploader(
+            "Opcional: Planilha de Contagem Inicial (.CSV com colunas SKU, Descrição, Qtd Inicial, Categoria, Marca):",
+            type=["csv"],
+            key="up_estoque_inicial",
         )
-    )
-    entradas["Custo_Unitario"] = np.where(
-        entradas["Total_Entradas"] > 0,
-        entradas["Valor_Entradas"] / entradas["Total_Entradas"],
-        0.0,
-    )
-
-    saidas = (
-        df_m[df_m["Tipo"] == "Saída"]
-        .groupby("SKU", as_index=False)
-        .agg(
-            Total_Saidas=("Quantidade", "sum"),
-            Valor_Saidas=("Valor_Total", "sum"),
-            Ultima_Saida=("Data_Emissao", "max"),
-            Desc_Sai=("Descrição", "first"),
+        # Modelo para download rápido
+        modelo_df = pd.DataFrame(
+            [
+                {"SKU": "7891000100103", "Descrição": "LEITE INTEGRAL 1L", "Categoria": "Laticínios", "Marca": "Marca A", "Qtd Inicial": 48},
+                {"SKU": "7891991010856", "Descrição": "CERVEJA LATA 350ML", "Categoria": "Bebidas", "Marca": "Marca B", "Qtd Inicial": 120},
+            ]
         )
-    )
-    saidas["Preco_Venda"] = np.where(
-        saidas["Total_Saidas"] > 0,
-        saidas["Valor_Saidas"] / saidas["Total_Saidas"],
-        0.0,
+        col2.download_button(
+            label="📥 Baixar Modelo de Planilha Inicial (.CSV)",
+            data=modelo_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
+            file_name="modelo_estoque_inicial.csv",
+            mime="text/csv",
+        )
+
+        if arq_ini is not None:
+            try:
+                df_ini = pd.read_csv(arq_ini, sep=None, engine="python")
+                if "SKU" in df_ini.columns and "Qtd Inicial" in df_ini.columns:
+                    df_ini["SKU"] = df_ini["SKU"].astype(str).str.strip()
+                    st.session_state["ponto_partida"] = {
+                        "origem": "contagem_inicial",
+                        "df_base_proximo_ciclo": df_ini,
+                    }
+                    st.success(f"Estoque inicial carregado com {len(df_ini)} produtos!")
+                else:
+                    st.error("A planilha precisa ter pelo menos as colunas 'SKU' e 'Qtd Inicial'.")
+            except Exception as e:
+                st.error(f"Erro ao ler planilha inicial: {e}")
+
+def _renderizar_etapa_2_xmls():
+    st.header("2. Processamento de XMLs (Entradas e Saídas)")
+    st.caption(
+        "Suba os arquivos XML individuais ou pastas compactadas (.ZIP) das notas de compra (NF-e) e vendas no caixa (NFC-e)."
     )
 
-    skus_todos = pd.DataFrame(
-        {
-            "SKU": pd.unique(
-                pd.concat(
-                    [
-                        base_inicial["SKU"] if not base_inicial.empty else pd.Series(dtype=str),
-                        entradas["SKU"],
-                        saidas["SKU"],
-                    ],
-                    ignore_index=True,
-                )
+    c_ent, c_sai = st.columns(2)
+    files_entrada = c_ent.file_uploader(
+        "📦 XMLs / ZIPs de ENTRADA (Compras de Fornecedores):",
+        type=["xml", "zip"],
+        accept_multiple_files=True,
+        key="up_xml_entradas",
+    )
+    files_saida = c_sai.file_uploader(
+        "🧾 XMLs / ZIPs de SAÍDA (Vendas / NFC-e / NF-e):",
+        type=["xml", "zip"],
+        accept_multiple_files=True,
+        key="up_xml_saidas",
+    )
+
+    if st.button("🚀 Processar XMLs e Consolidar Estoque", type="primary", use_container_width=True):
+        if not files_entrada and not files_saida:
+            st.warning("Envie pelo menos um arquivo XML ou ZIP de entrada ou saída.")
+            return
+
+        with st.spinner("Lendo notas fiscais e consolidando movimentações..."):
+            todos_itens = []
+            chaves_vistas = set()
+
+            for arq_nome, arq_bytes in _extrair_arquivos_xml(files_entrada or []):
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                if chave and chave not in chaves_vistas:
+                    chaves_vistas.add(chave)
+                    for it in itens:
+                        it["Tipo"] = "Entrada"
+                        todos_itens.append(it)
+
+            for arq_nome, arq_bytes in _extrair_arquivos_xml(files_saida or []):
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                if chave and chave not in chaves_vistas:
+                    chaves_vistas.add(chave)
+                    for it in itens:
+                        it["Tipo"] = "Saída"
+                        todos_itens.append(it)
+
+            if not todos_itens:
+                st.error("Nenhum item válido encontrado nos XMLs enviados.")
+                return
+
+            df_movs = pd.DataFrame(todos_itens)
+
+            # Consolida por SKU
+            entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
+                Total_Entradas=("Quantidade", "sum"),
+                Valor_Entradas=("Valor_Total", "sum"),
+                Custo_Unitario=("Valor_Unitario", "mean"),
             )
-        }
-    )
+            saidas = df_movs[df_movs["Tipo"] == "Saída"].groupby("SKU", as_index=False).agg(
+                Total_Saidas=("Quantidade", "sum"),
+                Valor_Saidas=("Valor_Total", "sum"),
+                Preco_Venda=("Valor_Unitario", "mean"),
+                Ultima_Saida=("Data_Emissao", "max"),
+            )
+            cadastro = df_movs.groupby("SKU", as_index=False).agg(
+                Descrição=("Descrição", "first"),
+            )
 
-    df_res = skus_todos.merge(base_inicial, on="SKU", how="left")
-    df_res = df_res.merge(entradas, on="SKU", how="left")
-    df_res = df_res.merge(saidas, on="SKU", how="left")
+            # 0. Garante que não haja itens duplicados na mesma nota fiscal
+            if "Item" in df_movs.columns and "Chave_NFe" in df_movs.columns:
+                df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Item"], keep="first")
 
-    if "Descrição" not in df_res.columns:
-        df_res["Descrição"] = np.nan
-    df_res["Descrição"] = (
-        df_res["Descrição"]
-        .fillna(df_res["Desc_Sai"])
-        .fillna(df_res["Desc_Ent"])
-        .fillna("Produto sem descrição")
-    )
-    df_res.drop(columns=["Desc_Sai", "Desc_Ent"], inplace=True, errors="ignore")
+            # Padroniza SKU antes de qualquer agrupamento
+            df_movs["SKU"] = df_movs["SKU"].astype(str).str.strip()
 
-    if "Categoria" not in df_res.columns:
-        df_res["Categoria"] = "Geral"
-    else:
-        df_res["Categoria"] = df_res["Categoria"].fillna("Geral")
+            # 1. Consolida por SKU (1 linha única por SKU)
+            entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
+                Total_Entradas=("Quantidade", "sum"),
+                Valor_Entradas=("Valor_Total", "sum"),
+                Custo_Unitario=("Valor_Unitario", "mean"),
+            )
+            saidas = df_movs[df_movs["Tipo"] == "Saída"].groupby("SKU", as_index=False).agg(
+                Total_Saidas=("Quantidade", "sum"),
+                Valor_Saidas=("Valor_Total", "sum"),
+                Preco_Venda=("Valor_Unitario", "mean"),
+                Ultima_Saida=("Data_Emissao", "max"),
+            )
+            cadastro = df_movs.groupby("SKU", as_index=False).agg(
+                Descrição=("Descrição", "first"),
+            )
 
-    if "Marca" not in df_res.columns:
-        df_res["Marca"] = "Sem Marca"
-    else:
-        df_res["Marca"] = df_res["Marca"].fillna("Sem Marca")
+            df_cons = cadastro.merge(entradas, on="SKU", how="left").merge(saidas, on="SKU", how="left")
+            for col_num in ["Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas", "Valor_Saidas",
+                            "Preco_Venda"]:
+                df_cons[col_num] = df_cons[col_num].fillna(0.0)
 
-    if "Fator_Conversao" not in df_res.columns:
-        df_res["Fator_Conversao"] = 1.0
-    else:
-        df_res["Fator_Conversao"] = pd.to_numeric(df_res["Fator_Conversao"], errors="coerce").fillna(1.0)
+            df_cons["Categoria"] = "Geral"
+            df_cons["Marca"] = "Sem Marca"
+            df_cons["Qtd Inicial"] = 0.0
+            df_cons["Fator_Conversao"] = 1.0
 
-    for col_num in ["Qtd Inicial", "Total_Entradas", "Total_Saidas", "Valor_Entradas", "Valor_Saidas", "Custo_Unitario", "Preco_Venda"]:
-        df_res[col_num] = pd.to_numeric(df_res[col_num], errors="coerce").fillna(0.0)
+            # 2. Aplica ponto de partida se existir (SEM duplicar SKUs!)
+            snap = st.session_state.get("ponto_partida")
+            if snap and "df_base_proximo_ciclo" in snap:
+                df_ref = snap["df_base_proximo_ciclo"].copy()
+                df_ref["SKU"] = df_ref["SKU"].astype(str).str.strip()
 
-    df_res["Saldo_Calculado"] = df_res["Qtd Inicial"] + df_res["Total_Entradas"] - df_res["Total_Saidas"]
-    return df_res
+                # PULO DO GATO 1: Consolida df_ref por SKU para impedir que o merge duplique produtos!
+                agg_ref = {}
+                if "Qtd Inicial" in df_ref.columns:
+                    agg_ref["Qtd Inicial"] = "sum"
+                if "Categoria" in df_ref.columns:
+                    agg_ref["Categoria"] = "first"
+                if "Marca" in df_ref.columns:
+                    agg_ref["Marca"] = "first"
+                if "Fator_Conversao" in df_ref.columns:
+                    agg_ref["Fator_Conversao"] = "first"
+                if "Descrição" in df_ref.columns:
+                    agg_ref["Descrição"] = "first"
+
+                df_ref_unico = df_ref.groupby("SKU", as_index=False).agg(agg_ref)
+
+                cols_merge = [c for c in ["SKU", "Qtd Inicial", "Categoria", "Marca", "Fator_Conversao"] if
+                              c in df_ref_unico.columns]
+                df_cons = df_cons.drop(columns=[c for c in cols_merge if c != "SKU" and c in df_cons.columns])
+
+                # PULO DO GATO 2: how="right" traz APENAS os produtos que você escolheu no Ponto de Partida!
+                # (Se quiser trazer todos os produtos dos XMLs mesmo os que não estão na planilha, troque "right" por "outer")
+                df_cons = df_cons.merge(df_ref_unico[cols_merge], on="SKU", how="right")
+
+                # Se algum produto escolhido não teve movimento no XML, puxa a descrição da planilha inicial
+                if "Descrição_x" in df_cons.columns and "Descrição_y" in df_cons.columns:
+                    df_cons["Descrição"] = df_cons["Descrição_x"].fillna(df_cons["Descrição_y"])
+                    df_cons = df_cons.drop(columns=["Descrição_x", "Descrição_y"])
+                df_cons["Descrição"] = df_cons["Descrição"].fillna("Item do Saldo Inicial")
+
+                for col_num in ["Qtd Inicial", "Total_Entradas", "Valor_Entradas", "Custo_Unitario", "Total_Saidas",
+                                "Valor_Saidas", "Preco_Venda"]:
+                    if col_num in df_cons.columns:
+                        df_cons[col_num] = df_cons[col_num].fillna(0.0)
+                df_cons["Categoria"] = df_cons["Categoria"].fillna("Geral")
+                df_cons["Marca"] = df_cons["Marca"].fillna("Sem Marca")
+                df_cons["Fator_Conversao"] = df_cons["Fator_Conversao"].fillna(1.0)
+
+                # Filtra também o df_movs para o Kardex e os demais painéis respeitarem apenas os SKUs escolhidos
+                df_movs = df_movs[df_movs["SKU"].isin(df_ref_unico["SKU"])].copy()
+
+            # 3. Trava final de segurança: garante 1 única linha por SKU e calcula o saldo exato
+            df_cons = df_cons.drop_duplicates(subset=["SKU"], keep="first").reset_index(drop=True)
+            df_cons["Saldo_Calculado"] = df_cons["Qtd Inicial"] + df_cons["Total_Entradas"] - df_cons["Total_Saidas"]
+
+            # Limpa backups antigos de conversão ao carregar novos XMLs
+            for k_bak in ["_Backup_Movs_Original", "_Backup_Consolidado_Original"]:
+                if k_bak in st.session_state:
+                    del st.session_state[k_bak]
+
+            st.session_state["df_xml_consolidado"] = df_cons
+            st.session_state["df_movs_detalhadas"] = df_movs
+            st.session_state["chaves_xml_lidas"] = chaves_vistas
+
+            st.success(
+                f"Processamento concluído! {len(chaves_vistas)} notas fiscais lidas e {len(df_cons)} SKUs consolidados."
+            )
+
+    if not st.session_state["df_xml_consolidado"].empty:
+        df_exib = st.session_state["df_xml_consolidado"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Notas Fiscais Lidas", len(st.session_state["chaves_xml_lidas"]))
+        m2.metric("SKUs Consolidados", len(df_exib))
+        m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
+        st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
 
 
 def main():
+    _inicializar_estado()
+
     with st.sidebar:
         st.title("🛒 Varejo Inteligente")
-        st.caption("Copiloto de Compras & Prevenção de Ruptura")
+        st.caption("Copiloto de Compras e Prevenção de Ruptura")
         st.divider()
-        nome_loja = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
-        st.info("Fluxo rápido:\n1. Ponto de Partida\n2. XMLs (Entradas/Saídas)\n3. Conversão CX→UN\n4. Lista de Compra & Kardex")
+        loja_nome = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
+        st.info(
+            "**Fluxo Recomendado:**\n"
+            "1. Defina o Ponto de Partida\n"
+            "2. Processe os XMLs\n"
+            "3. Ajuste Caixas → Unidades\n"
+            "4. Analise Compras e Rupturas"
+        )
 
-    st.title(f"Gestão Inteligente de Estoque — {nome_loja}")
+    st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
 
     tab1, tab2, tab_conv, tab3 = st.tabs(
         [
@@ -296,144 +393,15 @@ def main():
         ]
     )
 
-    # --- ABA 1: PONTO DE PARTIDA ---
     with tab1:
-        st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Anterior)")
-        st.caption(
-            "Informe o saldo inicial da loja (contagem inicial) ou suba a planilha de fechamento do ciclo anterior para dar continuidade ao histórico."
-        )
+        _renderizar_etapa_1_ponto_partida()
 
-        modo_inicio = st.radio(
-            "Como deseja iniciar este ciclo?",
-            options=[
-                "Começar do zero (Saldo inicial zerado ou planilha de contagem)",
-                "Continuar do ciclo anterior (Subir planilha Base Próximo Ciclo)",
-            ],
-            horizontal=True,
-        )
-
-        if modo_inicio.startswith("Começar"):
-            c_up, c_mod = st.columns([2, 1])
-            arq_inicial = c_up.file_uploader(
-                "Opcional: Planilha de Contagem Inicial (.CSV com colunas SKU, Descrição, Qtd Inicial, Categoria, Marca):",
-                type=["csv"],
-                key="up_inicial",
-            )
-            modelo_csv = pd.DataFrame(
-                {
-                    "SKU": ["7891000100103", "7894900011517"],
-                    "Descrição": ["Leite Integral 1L", "Refrigerante Cola 2L"],
-                    "Categoria": ["Laticínios", "Bebidas"],
-                    "Marca": ["Marca A", "Marca B"],
-                    "Qtd Inicial": [48, 36],
-                }
-            ).to_csv(index=False, sep=";").encode("utf-8-sig")
-            c_mod.download_button(
-                "📥 Baixar Modelo de Planilha Inicial (.CSV)",
-                data=modelo_csv,
-                file_name="modelo_estoque_inicial.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-
-            if arq_inicial is not None:
-                try:
-                    df_ini = _ler_csv_inteligente(arq_inicial)
-                    if "SKU" in df_ini.columns and "Qtd Inicial" in df_ini.columns:
-                        st.session_state["ponto_partida"] = {"df_base_proximo_ciclo": df_ini}
-                        st.success(f"Planilha inicial carregada com {len(df_ini)} produtos!")
-                        st.dataframe(df_ini.head(15), use_container_width=True, hide_index=True)
-                    else:
-                        st.error(
-                            f"A planilha precisa ter pelo menos as colunas 'SKU' e 'Qtd Inicial'. "
-                            f"Colunas encontradas no seu arquivo: {list(df_ini.columns)}"
-                        )
-                except Exception as e:
-                    st.error(f"Erro ao ler planilha inicial: {e}")
-            else:
-                st.session_state.setdefault("ponto_partida", None)
-        else:
-            arq_ciclo = st.file_uploader(
-                "Suba o arquivo 'base_proximo_ciclo_XXXX.csv' gerado no fechamento anterior:",
-                type=["csv"],
-                key="up_ciclo_anterior",
-            )
-            if arq_ciclo is not None:
-                try:
-                    df_ref = _ler_csv_inteligente(arq_ciclo)
-                    if "SKU" in df_ref.columns and "Qtd Inicial" in df_ref.columns:
-                        st.session_state["ponto_partida"] = {"df_base_proximo_ciclo": df_ref}
-                        data_ref = df_ref["Ref_Data"].iloc[0] if "Ref_Data" in df_ref.columns and not df_ref.empty else "Anterior"
-                        st.success(f"Ciclo anterior ({data_ref}) carregado com {len(df_ref)} SKUs e histórico acumulado!")
-                        st.dataframe(df_ref.head(15), use_container_width=True, hide_index=True)
-                    else:
-                        st.error(
-                            f"Arquivo inválido. Colunas encontradas: {list(df_ref.columns)}. "
-                            "Certifique-se de subir o CSV gerado pelo botão 'Base Próximo Ciclo'."
-                        )
-                except Exception as e:
-                    st.error(f"Erro ao ler arquivo do ciclo anterior: {e}")
-
-    # --- ABA 2: PROCESSAR XMLs ---
     with tab2:
-        st.header("2. Importar XMLs de Entradas (Compras) e Saídas (Vendas)")
-        st.caption(
-            "Suba arquivos .XML individuais ou pastas compactadas em .ZIP exportadas pelo sistema de caixa ou enviadas pelo contador."
-        )
+        _renderizar_etapa_2_xmls()
 
-        col_e, col_s = st.columns(2)
-        with col_e:
-            st.subheader("📦 XMLs de Entradas (NF-e Fornecedores)")
-            files_ent = st.file_uploader(
-                "Arraste XMLs ou ZIPs de compras:",
-                type=["xml", "zip"],
-                accept_multiple_files=True,
-                key="up_xml_entradas",
-            )
-        with col_s:
-            st.subheader("🧾 XMLs de Saídas (NFC-e / NF-e Vendas)")
-            files_sai = st.file_uploader(
-                "Arraste XMLs ou ZIPs de vendas:",
-                type=["xml", "zip"],
-                accept_multiple_files=True,
-                key="up_xml_saidas",
-            )
-
-        if st.button("🚀 Processar XMLs e Cruzar Estoque", type="primary", use_container_width=True):
-            if not files_ent and not files_sai:
-                st.warning("Selecione pelo menos um arquivo XML ou ZIP de entradas ou saídas.")
-            else:
-                with st.spinner("Lendo notas fiscais e consolidando movimentações..."):
-                    df_ent = _processar_arquivos_upload(files_ent, tipo_forcado="Entrada") if files_ent else pd.DataFrame()
-                    df_sai = _processar_arquivos_upload(files_sai, tipo_forcado="Saída") if files_sai else pd.DataFrame()
-                    df_movs = pd.concat([df_ent, df_sai], ignore_index=True)
-
-                    snap = st.session_state.get("ponto_partida")
-                    df_partida = snap["df_base_proximo_ciclo"] if (snap and "df_base_proximo_ciclo" in snap) else None
-
-                    df_consolidado = _consolidar_base(df_movs, df_partida)
-
-                    # Limpa backups antigos de conversão ao processar novo lote
-                    st.session_state.pop("_Backup_Movs_Original", None)
-                    st.session_state.pop("_Backup_Consolidado_Original", None)
-
-                    st.session_state["df_movs_detalhadas"] = df_movs
-                    st.session_state["df_xml_consolidado"] = df_consolidado
-
-                st.success(
-                    f"Processamento concluído! {len(df_consolidado)} produtos consolidados a partir de {len(df_movs)} linhas de notas fiscais."
-                )
-                st.info("👉 Próximo passo: Verifique a aba **3. De-Para (Conversão CX→UN)** caso haja compras em caixa/fardo, ou vá direto para **4. Indicadores e Kardex**.")
-
-        if "df_xml_consolidado" in st.session_state and not st.session_state["df_xml_consolidado"].empty:
-            st.subheader("Prévia dos Produtos Consolidados")
-            st.dataframe(st.session_state["df_xml_consolidado"].head(20), use_container_width=True, hide_index=True)
-
-    # --- ABA 3: CONVERSÃO CX -> UN ---
     with tab_conv:
         renderizar_aba_conversao()
 
-    # --- ABA 4: INDICADORES E KARDEX ---
     with tab3:
         renderizar_aba_indicadores()
 
