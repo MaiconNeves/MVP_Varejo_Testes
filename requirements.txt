@@ -1,6 +1,6 @@
 streamlit
 pandas
-streamlit-qrcode-scanner
-google-genai
-pillow
+numpy
+openpyxl
 requests
+psycopg[binary]
