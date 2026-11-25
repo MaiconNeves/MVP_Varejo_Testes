@@ -591,13 +591,13 @@ def renderizar_aba_indicadores():
     regras_categoria_dict = {}
     for row_reg in df_regras_editado.itertuples(index=False):
         cat_nome = str(row_reg[0]).strip()
-    regras_categoria_dict[cat_nome] = {
-    "min": int(row_reg[1]),
-    "alvo": int(row_reg[2]),
-    "excesso": int(row_reg),
-    "deducoes_pct": float(row_reg[4]),
-    "margem_alvo_pct": float(row_reg[5]),
-    }
+        regras_categoria_dict[cat_nome] = {
+            "min": int(row_reg[1]),
+            "alvo": int(row_reg[2]),
+            "excesso": int(row_reg[3]),
+            "deducoes_pct": float(row_reg[4]),
+            "margem_alvo_pct": float(row_reg[5]),
+        }
     df_ind, df_kardex_completo = calcular_indicadores_estoque(
     df_consolidado=df_consolidado,
     df_movs=df_movs,
