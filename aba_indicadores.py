@@ -257,14 +257,16 @@ def calcular_indicadores_estoque(
         dias_ant = int(hist_item.get("dias_disp_acum", 0))
         saidas_acum_list.append(saidas_ant + float(getattr(row, "Total_Saidas")))
         dias_disp_acum_list.append(dias_ant + int(getattr(row, "Dias_Com_Estoque")))
-        df["Saidas_Acumuladas"] = saidas_acum_list
-        df["Dias_Disp_Acumulados"] = dias_disp_acum_list
-        if usar_dmd_acumulada and historico_acumulado:
-            df["DMD"] = np.where(
+
+    df["Saidas_Acumuladas"] = saidas_acum_list
+    df["Dias_Disp_Acumulados"] = dias_disp_acum_list
+
+    if usar_dmd_acumulada and historico_acumulado:
+        df["DMD"] = np.where(
             df["Dias_Disp_Acumulados"] > 0,
             df["Saidas_Acumuladas"] / df["Dias_Disp_Acumulados"],
             df["DMD_Real_Hist"],
-            )
+        )
         else:
             df["DMD"] = df["DMD_Real_Hist"]
         # 3. Regras de Cobertura, Excesso e Margens por Categoria
