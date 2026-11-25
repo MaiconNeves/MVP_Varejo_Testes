@@ -473,20 +473,23 @@ def renderizar_aba_indicadores():
     historico_acumulado = {}
     if tem_comparacao and "df_base_proximo_ciclo" in snap:
         df_ref = snap["df_base_proximo_ciclo"]
-    if "SKU" in df_ref.columns and "Saidas_Acum_Ref" in df_ref.columns:
-        for r in df_ref.itertuples(index=False):
-            sku_k = str(getattr(r, "SKU")).strip()
-    historico_acumulado[sku_k] = {
-    "saidas_acum": float(getattr(r, "Saidas_Acum_Ref", 0.0) or 0.0),
-    "dias_disp_acum": float(getattr(r, "Dias_Disp_Acum_Ref", 0.0) or 0.0),
-    }
+        if "SKU" in df_ref.columns and "Saidas_Acum_Ref" in df_ref.columns:
+            for r in df_ref.itertuples(index=False):
+                sku_k = str(getattr(r, "SKU")).strip()
+                val_saidas = getattr(r, "Saidas_Acum_Ref", 0.0)
+                val_dias = getattr(r, "Dias_Disp_Acum_Ref", 0.0)
+                historico_acumulado[sku_k] = {
+                    "saidas_acum": float(val_saidas) if pd.notna(val_saidas) else 0.0,
+                    "dias_disp_acum": float(val_dias) if pd.notna(val_dias) else 0.0,
+                }
+
     dias_padrao = 30
     if df_movs is not None and not df_movs.empty and "Data_Emissao" in df_movs.columns:
         datas_validas = pd.to_datetime(df_movs["Data_Emissao"], errors="coerce").dropna()
-    if not datas_validas.empty:
-        dias_calc = int((datas_validas.max() - datas_validas.min()).days) + 1
-    if 1 <= dias_calc <= 365:
-        dias_padrao = dias_calc
+        if not datas_validas.empty:
+            dias_calc = int((datas_validas.max() - datas_validas.min()).days) + 1
+            if 1 <= dias_calc <= 365:
+                dias_padrao = dias_calc
     # Identifica categorias únicas presentes nos dados
     if "Categoria" in df_consolidado.columns:
         categorias_unicas = sorted(
