@@ -267,7 +267,7 @@ def calcular_indicadores_estoque(
             df["Saidas_Acumuladas"] / df["Dias_Disp_Acumulados"],
             df["DMD_Real_Hist"],
         )
-        else:
+    else:
             df["DMD"] = df["DMD_Real_Hist"]
         # 3. Regras de Cobertura, Excesso e Margens por Categoria
             regras = regras_categoria or {}
