@@ -698,73 +698,73 @@ def renderizar_aba_indicadores():
         )
     else:
         st.subheader(f"📋 Visão Geral dos Produtos ({len(df_acao)} itens)")
-        if df_acao.empty:
-            st.success("Nenhum produto enquadrado neste filtro no momento!")
-        else:
-            df_exib_comprador = df_acao.copy()
-            df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
-            df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
-            df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
+    if df_acao.empty:
+        st.success("Nenhum produto enquadrado neste filtro no momento!")
+    else:
+        df_exib_comprador = df_acao.copy()
+        df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
+        df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
+        df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
         cols_simples = [
-			"Status_Estoque",
-			"Curva_ABC",
-			"Categoria",
-			"SKU",
-			"Descrição",
-			"Saldo_Exib",
-			"DMD_Exib",
-			"Previsao_Ruptura",
-			"Compra_Exib",
-			"Investimento_Compra_RS",
-			]
-    st.dataframe(
-    df_exib_comprador[cols_simples].rename(
-    columns={
-    "Status_Estoque": "Situação",
-    "Curva_ABC": "Curva",
-    "Categoria": "Categoria",
-    "SKU": "Código",
-    "Descrição": "Produto",
-    "Saldo_Exib": "Estoque Atual",
-    "DMD_Exib": "Venda / Dia",
-    "Previsao_Ruptura": "Quando Acaba?",
-    "Compra_Exib": "Sugestão Compra",
-    "Investimento_Compra_RS": "Custo Est. Compra (R$)",
-    }
-    ),
-    column_config={
-    "Custo Est. Compra (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-    },
-    use_container_width=True,
-    hide_index=True,
-    )
+            "Status_Estoque",
+            "Curva_ABC",
+            "Categoria",
+            "SKU",
+            "Descrição",
+            "Saldo_Exib",
+            "DMD_Exib",
+            "Previsao_Ruptura",
+            "Compra_Exib",
+            "Investimento_Compra_RS",
+        ]
+        st.dataframe(
+        df_exib_comprador[cols_simples].rename(
+        columns={
+        "Status_Estoque": "Situação",
+        "Curva_ABC": "Curva",
+        "Categoria": "Categoria",
+        "SKU": "Código",
+        "Descrição": "Produto",
+        "Saldo_Exib": "Estoque Atual",
+        "DMD_Exib": "Venda / Dia",
+        "Previsao_Ruptura": "Quando Acaba?",
+        "Compra_Exib": "Sugestão Compra",
+        "Investimento_Compra_RS": "Custo Est. Compra (R$)",
+        }
+        ),
+        column_config={
+        "Custo Est. Compra (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+        },
+        use_container_width=True,
+        hide_index=True,
+        )
     b1, b2 = st.columns(2)
     csv_pedido = df_exib_comprador[cols_simples].to_csv(index=False, sep=";").encode("utf-8-sig")
     b1.download_button(
-    label="📥 Baixar Lista Atual para Excel / WhatsApp (.CSV)",
-    data=csv_pedido,
-    file_name=f"lista_acao_estoque_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}.csv",
-    mime="text/csv",
-    type="primary",
-    use_container_width=True,
+        label="📥 Baixar Lista Atual para Excel / WhatsApp (.CSV)",
+        data=csv_pedido,
+        file_name=f"lista_acao_estoque_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')}.csv",
+        mime="text/csv",
+        type="primary",
+        use_container_width=True,
     )
     df_prox_ciclo = _gerar_base_proximo_ciclo(
-    df_ind=df_ind,
-    data_registro=datetime.datetime.now().strftime("%Y-%m-%d"),
-    faturamento_total=faturamento_total,
-    fat_medio_diario=fat_medio_diario,
-    dias_periodo=int(dias_periodo),
-    valor_estoque_total=valor_estoque_total,
-    qtd_ruptura=qtd_ruptura,
-    perda_ruptura_total=perda_ruptura_total,
+        df_ind=df_ind,
+        data_registro=datetime.datetime.now().strftime("%Y-%m-%d"),
+        faturamento_total=faturamento_total,
+        fat_medio_diario=fat_medio_diario,
+        dias_periodo=int(dias_periodo),
+        valor_estoque_total=valor_estoque_total,
+        qtd_ruptura=qtd_ruptura,
+        perda_ruptura_total=perda_ruptura_total,
     )
     csv_prox = df_prox_ciclo.to_csv(index=False, sep=";").encode("utf-8-sig")
     b2.download_button(
-    label="💾 Baixar Fechamento para Continuar no Próximo Mês (.CSV)",
-    data=csv_prox,
-    file_name=f"fechamento_ciclo{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
-    mime="text/csv",
-    use_container_width=True,
+        label="💾 Baixar Fechamento para Continuar no Próximo Mês (.CSV)",
+        data=csv_prox,
+        file_name=f"fechamento_ciclo{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+        mime="text/csv",
+        use_container_width=True,
     )
     # CAMADA 2: AUDITORIA TÉCNICA, KARDEX DIA A DIA E CATEGORIAS/MARCAS
     with camada_auditoria:
