@@ -8,6 +8,7 @@ import streamlit as st
 
 from aba_conversao import renderizar_aba_conversao
 from aba_indicadores import renderizar_aba_indicadores
+from aba_whatsapp_db import renderizar_aba_whatsapp_db
 
 try:
     from aba_coleta import renderizar_aba_coleta
@@ -152,7 +153,7 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
 
     for elem in root.iter():
         if "}" in elem.tag:
-            elem.tag = elem.tag.split("}", 1)[-1]
+            elem.tag = elem.tag.split("}", 1)[1]
 
     inf_nfe = root.find(".//infNFe")
     if inf_nfe is None:
@@ -258,13 +259,9 @@ def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: s
                 return
 
         if "SKU" in df_norm.columns and "Qtd Inicial" in df_norm.columns:
-            data_corte_str = ""
-            if "Ref_Data" in df_norm.columns and len(df_norm) > 0:
-                data_corte_str = str(df_norm["Ref_Data"].iloc[0])
-
             st.session_state["ponto_partida"] = {
                 "origem": origem_label,
-                "data_corte": data_corte_str,
+                "data_corte": str(df_norm["Ref_Data"].iloc[0]) if "Ref_Data" in df_norm.columns and len(df_norm) > 0 else "",
                 "df_base_proximo_ciclo": df_norm,
             }
             st.success(f"Planilha carregada com sucesso ({len(df_norm)} SKUs reconhecidos)! Avance para a Etapa 2.")
@@ -471,6 +468,71 @@ def _renderizar_etapa_2_xmls():
         m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
         st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
 
+        # --- BLOCO DE AJUSTE MANUAL / QUEBRA / VENCIMENTO ---
+        st.divider()
+        with st.expander("🛠️ Lançar Ajuste Manual / Quebra / Vencimento (Sem Nota Fiscal)"):
+            st.caption(
+                "Use este formulário para registrar perdas (garrafa quebrada, produto vencido, consumo interno) "
+                "ou acertos de contagem física na data exata em que ocorreram."
+            )
+            opcoes_sku = {
+                f"{row['SKU']} — {row['Descrição']} (Saldo atual: {row['Saldo_Calculado']:.0f})": (row["SKU"], row["Descrição"])
+                for _, row in df_exib.iterrows()
+            }
+
+            c_aj1, c_aj2, c_aj3, c_aj4 = st.columns([3, 1.5, 1.5, 1.5])
+            item_sel = c_aj1.selectbox("Produto / SKU:", list(opcoes_sku.keys()), key="aj_sku_sel")
+            motivo_aj = c_aj2.selectbox(
+                "Motivo:",
+                ["Quebra / Avaria (-)", "Vencimento (-)", "Consumo Interno (-)", "Acerto Contagem (+)"],
+                key="aj_motivo",
+            )
+            qtd_aj = c_aj3.number_input("Quantidade:", min_value=0.01, value=1.0, step=1.0, key="aj_qtd")
+            data_aj = c_aj4.date_input("Data da ocorrência:", value=datetime.now().date(), format="DD/MM/YYYY", key="aj_data")
+
+            if st.button("✅ Aplicar Ajuste no Estoque", key="btn_aplicar_ajuste"):
+                sku_alvo, desc_alvo = opcoes_sku[item_sel]
+                eh_entrada = motivo_aj.endswith("(+)")
+                tipo_mov_aj = "Entrada" if eh_entrada else "Saída"
+                data_str = data_aj.strftime("%Y-%m-%d")
+
+                nova_mov = pd.DataFrame([{
+                    "Chave_NFe": f"AJUSTE_{datetime.now().strftime('%H%M%S')}",
+                    "Item": "1",
+                    "Modelo": "AJ",
+                    "Tipo": tipo_mov_aj,
+                    "Data_Emissao": data_str,
+                    "Data": data_str,
+                    "SKU": sku_alvo,
+                    "Codigo_Fornecedor": sku_alvo,
+                    "EAN": sku_alvo,
+                    "Descrição": desc_alvo,
+                    "Unidade": "UN",
+                    "Quantidade": float(qtd_aj),
+                    "Valor_Unitario": 0.0,
+                    "Valor_Total": 0.0,
+                }])
+
+                df_movs_atual = st.session_state.get("df_movs_detalhadas", pd.DataFrame())
+                st.session_state["df_movs_detalhadas"] = pd.concat([df_movs_atual, nova_mov], ignore_index=True)
+
+                df_cons_atual = st.session_state["df_xml_consolidado"].copy()
+                mask = df_cons_atual["SKU"] == sku_alvo
+                if eh_entrada:
+                    df_cons_atual.loc[mask, "Total_Entradas"] += float(qtd_aj)
+                else:
+                    df_cons_atual.loc[mask, "Total_Saidas"] += float(qtd_aj)
+
+                df_cons_atual["Saldo_Calculado"] = (
+                    df_cons_atual["Qtd Inicial"]
+                    + df_cons_atual["Total_Entradas"]
+                    - df_cons_atual["Total_Saidas"]
+                )
+                st.session_state["df_xml_consolidado"] = df_cons_atual
+
+                st.success(f"Ajuste aplicado! **{motivo_aj}** de **{qtd_aj:g} un** registrado para **{desc_alvo}** em {data_aj.strftime('%d/%m/%Y')}.")
+                st.rerun()
+
 
 def main():
     _inicializar_estado()
@@ -485,7 +547,8 @@ def main():
             "1. Defina o Ponto de Partida\n"
             "2. Processe os XMLs\n"
             "3. Ajuste Caixas → Unidades\n"
-            "4. Analise Compras e Rupturas"
+            "4. Analise Compras e Rupturas\n"
+            "5. Salve e Dispare no WhatsApp"
         )
 
     st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
@@ -495,11 +558,12 @@ def main():
         "2. Processar XMLs",
         "3. De-Para (Conversão CX→UN)",
         "4. Indicadores e Kardex",
+        "5. Alertas WhatsApp & Banco",
     ]
     if TEM_ABA_ENTRADAS_SAIDAS:
-        nomes_abas.append("5. Entradas x Saídas")
+        nomes_abas.append("6. Entradas x Saídas")
     if TEM_ABA_COLETA:
-        nomes_abas.append("6. Coleta Rápida")
+        nomes_abas.append("7. Coleta Rápida")
 
     abas = st.tabs(nomes_abas)
 
@@ -515,7 +579,10 @@ def main():
     with abas[3]:
         renderizar_aba_indicadores()
 
-    idx_extra = 4
+    with abas[4]:
+        renderizar_aba_whatsapp_db(loja_nome)
+
+    idx_extra = 5
     if TEM_ABA_ENTRADAS_SAIDAS:
         with abas[idx_extra]:
             renderizar_aba_entradas_saidas()
