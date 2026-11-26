@@ -5,14 +5,14 @@ import streamlit as st
 
 
 def _formatar_brl(valor: float) -> str:
-    \"\"\"Formata um número float para moeda brasileira (R$ 1.234,56).\"\"\"
+    """Formata um número float para moeda brasileira (R$ 1.234,56)."""
     sinal = "-" if valor < 0 else ""
     abs_val = abs(valor)
     return f"{sinal}R$ {abs_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _calcular_dias_sem_giro(df: pd.DataFrame, data_referencia: pd.Timestamp) -> pd.Series:
-    \"\"\"Calcula quantos dias se passaram desde a última saída registrada até a data de referência.\"\"\"
+    """Calcula quantos dias se passaram desde a última saída registrada até a data de referência."""
     if "Ultima_Saida" not in df.columns:
         return pd.Series([np.nan] * len(df), index=df.index)
 
@@ -22,7 +22,7 @@ def _calcular_dias_sem_giro(df: pd.DataFrame, data_referencia: pd.Timestamp) -> 
 
 
 def _estimar_data_ruptura(row_r: pd.Series) -> str:
-    \"\"\"Estima a data em que o estoque atual vai zerar com base na DMD Real.\"\"\"
+    """Estima a data em que o estoque atual vai zerar com base na DMD Real."""
     if row_r["Saldo_Calculado"] <= 0:
         return "Em Ruptura Hoje"
     if row_r["DMD"] <= 0:
@@ -40,11 +40,11 @@ def _reconstruir_kardex_diario(
     dias_periodo: int,
     col_inicial: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    \"\"\"
+    """
     Reconstrói o extrato diário (Kardex) de cada SKU dentro da janela analisada
     aplicando a Regra Ouro de disponibilidade e ruptura, além de calcular
     os dias consecutivos recentes com estoque disponível e sem venda.
-    \"\"\"
+    """
     n_dias = max(int(dias_periodo), 1)
     datas_mov = pd.Series(dtype="datetime64[ns]")
 
@@ -192,11 +192,11 @@ def calcular_indicadores_estoque(
     pct_deducoes_despesas: float = 15.0,
     margem_alvo_padrao: float = 20.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    \"\"\"
+    """
     Calcula os indicadores de estoque com base na reconstrução histórica diária (Kardex)
     aplicando a Regra Ouro para disponibilidade e ruptura, além de Margem Bruta e Líquida
     parametrizáveis por Categoria.
-    \"\"\"
+    """
     df = df_consolidado.copy()
     df["SKU"] = df["SKU"].astype(str).str.strip()
 
@@ -409,7 +409,7 @@ def _gerar_base_proximo_ciclo(
     qtd_ruptura: int,
     perda_ruptura_total: float,
 ) -> pd.DataFrame:
-    \"\"\"Monta a planilha estruturada para continuar a análise no próximo ciclo.\"\"\"
+    """Monta a planilha estruturada para continuar a análise no próximo ciclo."""
     colunas_preservar = [c for c in ["SKU", "Descrição", "Categoria", "Marca", "Fator_Conversao"] if c in df_ind.columns]
     df_next = df_ind[colunas_preservar].copy()
     df_next["Qtd Inicial"] = df_ind["Saldo_Calculado"].clip(lower=0.0)
@@ -428,7 +428,7 @@ def _gerar_base_proximo_ciclo(
 
 
 def _agrupar_por_dimensao(df_ind: pd.DataFrame, dimensao: str) -> pd.DataFrame:
-    \"\"\"Consolida KPIs financeiros, de disponibilidade, ruptura histórica e margens por Categoria ou Marca.\"\"\"
+    """Consolida KPIs financeiros, de disponibilidade, ruptura histórica e margens por Categoria ou Marca."""
     agrupado = (
         df_ind.groupby(dimensao, as_index=False)
         .agg(
