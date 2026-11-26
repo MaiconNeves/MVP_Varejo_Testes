@@ -265,47 +265,47 @@ def calcular_indicadores_estoque(
         df["DMD"] = np.where(
             df["Dias_Disp_Acumulados"] > 0,
             df["Saidas_Acumuladas"] / df["Dias_Disp_Acumulados"],
-            df["DMD_Real_Hist"],
-        )
+            df["DMD_Real_Hist"]
+            )
     else:
-            df["DMD"] = df["DMD_Real_Hist"]
-        # 3. Regras de Cobertura, Excesso e Margens por Categoria
-            regras = regras_categoria or {}
-            df["Cob_Min_Aplicada"] = df["Categoria"].map(
+        df["DMD"] = df["DMD_Real_Hist"]
+            # 3. Regras de Cobertura, Excesso e Margens por Categoria
+        regras = regras_categoria or {}
+        df["Cob_Min_Aplicada"] = df["Categoria"].map(
             lambda c: int(regras.get(c, {}).get("min", cobertura_minima))
             )
-            df["Cob_Alvo_Aplicada"] = df["Categoria"].map(
+        df["Cob_Alvo_Aplicada"] = df["Categoria"].map(
             lambda c: int(regras.get(c, {}).get("alvo", cobertura_alvo))
             )
-            df["Dias_Excesso_Aplicado"] = df["Categoria"].map(
+        df["Dias_Excesso_Aplicado"] = df["Categoria"].map(
             lambda c: int(regras.get(c, {}).get("excesso", dias_excesso))
             )
-            df["Deductions_Pct_Aplicada"] = df["Categoria"].map(
+        df["Deductions_Pct_Aplicada"] = df["Categoria"].map(
             lambda c: float(regras.get(c, {}).get("deducoes_pct", pct_deducoes_despesas))
             )
-            df["Margem_Alvo_Pct_Aplicada"] = df["Categoria"].map(
+        df["Margem_Alvo_Pct_Aplicada"] = df["Categoria"].map(
             lambda c: float(regras.get(c, {}).get("margem_alvo_pct", margem_alvo_padrao))
             )
             # 4. Cobertura em Dias e Previsão de Ruptura
-            df["Cobertura_Dias"] = np.where(
+        df["Cobertura_Dias"] = np.where(
             df["DMD"] > 0,
             (df["Saldo_Calculado"].clip(lower=0.0) / df["DMD"]).round(1),
             999.0,
             )
-            df["Previsao_Ruptura"] = df.apply(_estimar_data_ruptura, axis=1)
+        df["Previsao_Ruptura"] = df.apply(_estimar_data_ruptura, axis=1)
             # 5. Indicadores Financeiros (usando deduções e margem alvo da categoria)
-            df["Valor_Saidas"] = (df["Total_Saidas"] * df["Preco_Venda"]).round(2)
-            df["CMV_Vendido"] = (df["Total_Saidas"] * df["Custo_Unitario"]).round(2)
-            df["Lucro_Bruto"] = np.where(
-            df["CMV_Vendido"] > 0,
-            (df["Valor_Saidas"] - df["CMV_Vendido"]).round(2),
-            0.0,
-            )
-    df["Margem_Bruta_Pct"] = np.where(
-        (df["Valor_Saidas"] > 0) & (df["CMV_Vendido"] > 0),
-        ((df["Lucro_Bruto"] / df["Valor_Saidas"]) * 100).round(2),
-        np.nan,
-    )
+        df["Valor_Saidas"] = (df["Total_Saidas"] * df["Preco_Venda"]).round(2)
+        df["CMV_Vendido"] = (df["Total_Saidas"] * df["Custo_Unitario"]).round(2)
+        df["Lucro_Bruto"] = np.where(
+        df["CMV_Vendido"] > 0,
+        (df["Valor_Saidas"] - df["CMV_Vendido"]).round(2),
+        0.0,
+        )
+        df["Margem_Bruta_Pct"] = np.where(
+            (df["Valor_Saidas"] > 0) & (df["CMV_Vendido"] > 0),
+            ((df["Lucro_Bruto"] / df["Valor_Saidas"]) * 100).round(2),
+            np.nan,
+        )
     fator_ded_series = df["Deductions_Pct_Aplicada"] / 100.0
     df["Lucro_Liquido_Est"] = np.where(
         df["CMV_Vendido"] > 0,
@@ -399,7 +399,7 @@ def _gerar_base_proximo_ciclo(
     valor_estoque_total: float,
     qtd_ruptura: int,
     perda_ruptura_total: float,
-) -> pd.DataFrame:
+        ) -> pd.DataFrame:
     """Monta a planilha estruturada para continuar a análise no próximo ciclo."""
     colunas_preservar = [c for c in ["SKU", "Descrição", "Categoria", "Marca", "Fator_Conversao"] if c in df_ind.columns]
     df_next = df_ind[colunas_preservar].copy()
@@ -600,24 +600,24 @@ def renderizar_aba_indicadores():
             "deducoes_pct": float(row_reg[4]),
             "margem_alvo_pct": float(row_reg[5]),
         }
-    df_ind, df_kardex_completo = calcular_indicadores_estoque(
-    df_consolidado=df_consolidado,
-    df_movs=df_movs,
-    dias_periodo=int(dias_periodo),
-    cobertura_minima=int(cobertura_minima),
-    cobertura_alvo=int(cobertura_alvo),
-    dias_excesso=int(dias_excesso),
-    regras_categoria=regras_categoria_dict,
-    historico_acumulado=historico_acumulado,
-    usar_dmd_acumulada=usar_dmd_acumulada,
-    pct_deducoes_despesas=float(pct_deducoes_despesas),
-    margem_alvo_padrao=float(margem_alvo_padrao),
-    )
-    faturamento_total = float(df_ind["Valor_Saidas"].sum())
-    perda_ruptura_total = float(df_ind["Perda_Financeira_Hist"].sum())
-    capital_parado_excesso = float(
-    df_ind[df_ind["Status_Estoque"].isin(["🔵 Excesso", "⚪ Sem Saída no Período"])]["Valor_Estoque_Atual"].sum()
-    )
+        df_ind, df_kardex_completo = calcular_indicadores_estoque(
+        df_consolidado=df_consolidado,
+        df_movs=df_movs,
+        dias_periodo=int(dias_periodo),
+        cobertura_minima=int(cobertura_minima),
+        cobertura_alvo=int(cobertura_alvo),
+        dias_excesso=int(dias_excesso),
+        regras_categoria=regras_categoria_dict,
+        historico_acumulado=historico_acumulado,
+        usar_dmd_acumulada=usar_dmd_acumulada,
+        pct_deducoes_despesas=float(pct_deducoes_despesas),
+        margem_alvo_padrao=float(margem_alvo_padrao),
+        )
+        faturamento_total = float(df_ind["Valor_Saidas"].sum())
+        perda_ruptura_total = float(df_ind["Perda_Financeira_Hist"].sum())
+        capital_parado_excesso = float(
+        df_ind[df_ind["Status_Estoque"].isin(["🔵 Excesso", "⚪ Sem Saída no Período"])]["Valor_Estoque_Atual"].sum()
+        )
     valor_estoque_total = float(df_ind["Valor_Estoque_Atual"].sum())
     investimento_compra_total = float(df_ind["Investimento_Compra_RS"].sum())
     qtd_comprar_urgente = int((df_ind["Sugestao_Compra"] > 0).sum())
