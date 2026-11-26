@@ -3,13 +3,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-
 def _formatar_brl(valor: float) -> str:
     """Formata um número float para moeda brasileira (R$ 1.234,56)."""
     sinal = "-" if valor < 0 else ""
     abs_val = abs(valor)
     return f"{sinal}R$ {abs_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
 
 def _calcular_dias_sem_giro(df: pd.DataFrame, data_referencia: pd.Timestamp) -> pd.Series:
     """Calcula quantos dias se passaram desde a última saída registrada até a data de referência."""
