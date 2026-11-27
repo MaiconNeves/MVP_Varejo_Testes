@@ -8,7 +8,11 @@ import streamlit as st
 
 from aba_conversao import renderizar_aba_conversao
 from aba_indicadores import renderizar_aba_indicadores
-from aba_whatsapp_db import renderizar_aba_whatsapp_db
+from aba_whatsapp_db import (
+    carregar_ultimo_snapshot_loja,
+    listar_lojas_ativas,
+    renderizar_aba_whatsapp_db,
+)
 
 try:
     from aba_coleta import renderizar_aba_coleta
@@ -272,22 +276,59 @@ def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: s
 
 
 def _renderizar_etapa_1_ponto_partida():
-    st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Anterior)")
+    st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Contínuo)")
     st.caption(
-        "Aceita planilhas em qualquer formato (.XLSX, .XLS, .CSV, .ODS) e reconhece automaticamente "
-        "variações nos nomes das colunas (ex: Código/SKU, Saldo/Estoque/Qtd Inicial)."
+        "Escolha iniciar por uma planilha de contagem/ciclo ou puxar automaticamente o último fechamento salvo no Banco na Nuvem."
     )
 
     opcao = st.radio(
         "Como deseja iniciar este ciclo?",
         options=[
-            "Começar do zero (Saldo inicial zerado ou planilha de contagem)",
-            "Continuar do ciclo anterior (Subir planilha Base Próximo Ciclo)",
+            "🔄 Puxar Último Saldo Salvo do Banco (Supabase / Nuvem)",
+            "📄 Subir Planilha de Contagem Inicial (.XLSX, .CSV, .ODS)",
+            "📂 Continuar do Ciclo Anterior via Arquivo (.CSV ou .XLSX)",
         ],
         horizontal=True,
     )
 
-    if opcao.startswith("Continuar"):
+    if opcao.startswith("🔄 Puxar Último Saldo"):
+        df_lojas = listar_lojas_ativas()
+        if df_lojas.empty:
+            st.info(
+                "Nenhuma loja com fechamento salvo encontrada no banco ainda. "
+                "Faça o primeiro ciclo subindo uma planilha ao lado e grave o fechamento na **Aba 5 (Alertas WhatsApp & Banco)**."
+            )
+        else:
+            opcoes_l = {
+                f"{r['loja_id']} — {r['nome_fantasia']}": r["loja_id"]
+                for _, r in df_lojas.iterrows()
+            }
+            c_l1, c_l2 = st.columns([2.5, 1.5])
+            loja_escolhida_label = c_l1.selectbox(
+                "Selecione o Cliente / Mercado cadastrado:",
+                list(opcoes_l.keys()),
+                key="sel_loja_puxar_saldo",
+            )
+            c_l2.write("")
+            c_l2.write("")
+            if c_l2.button("⬇️ Carregar Último Saldo do Banco", type="primary", use_container_width=True):
+                id_alvo = opcoes_l[loja_escolhida_label]
+                df_snap, data_snap = carregar_ultimo_snapshot_loja(id_alvo)
+                if df_snap.empty:
+                    st.warning(f"A loja **{loja_escolhida_label}** ainda não possui fechamento (snapshot) gravado no banco.")
+                else:
+                    st.session_state["ponto_partida"] = {
+                        "origem": f"banco_nuvem_{id_alvo}",
+                        "data_corte": data_snap,
+                        "df_base_proximo_ciclo": df_snap,
+                    }
+                    st.success(
+                        f"✅ Último fechamento carregado com sucesso! **{len(df_snap)} SKUs** recuperados "
+                        f"(Data do fechamento: **{data_snap}**). Agora suba na **Etapa 2** apenas os XMLs posteriores a essa data!"
+                    )
+                    st.dataframe(df_snap.head(15), use_container_width=True, hide_index=True)
+
+    elif opcao.startswith("📂 Continuar"):
         arq_ciclo = st.file_uploader(
             "Suba o arquivo do fechamento anterior (.CSV, .XLSX, .XLS ou .ODS):",
             type=["csv", "xlsx", "xls", "ods"],
@@ -370,14 +411,11 @@ def _renderizar_etapa_2_xmls():
 
             df_movs = pd.DataFrame(todos_itens)
 
-            # 0. Garante que não haja itens duplicados na mesma nota fiscal
             if "Item" in df_movs.columns and "Chave_NFe" in df_movs.columns:
                 df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Item"], keep="first")
 
-            # Padroniza SKU antes de qualquer agrupamento
             df_movs["SKU"] = df_movs["SKU"].astype(str).str.strip()
 
-            # 1. Consolida por SKU (1 linha única por SKU)
             entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
                 Total_Entradas=("Quantidade", "sum"),
                 Valor_Entradas=("Valor_Total", "sum"),
@@ -402,7 +440,6 @@ def _renderizar_etapa_2_xmls():
             df_cons["Qtd Inicial"] = 0.0
             df_cons["Fator_Conversao"] = 1.0
 
-            # 2. Aplica ponto de partida se existir (SEM duplicar SKUs!)
             snap = st.session_state.get("ponto_partida")
             if snap and "df_base_proximo_ciclo" in snap:
                 df_ref = snap["df_base_proximo_ciclo"].copy()
@@ -444,7 +481,6 @@ def _renderizar_etapa_2_xmls():
 
                 df_movs = df_movs[df_movs["SKU"].isin(df_ref_unico["SKU"])].copy()
 
-            # 3. Trava final de segurança: garante 1 única linha por SKU e calcula o saldo exato
             df_cons = df_cons.drop_duplicates(subset=["SKU"], keep="first").reset_index(drop=True)
             df_cons["Saldo_Calculado"] = df_cons["Qtd Inicial"] + df_cons["Total_Entradas"] - df_cons["Total_Saidas"]
 
@@ -468,11 +504,10 @@ def _renderizar_etapa_2_xmls():
         m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
         st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
 
-        # --- BLOCO DE AJUSTE MANUAL / QUEBRA / VENCIMENTO ---
         st.divider()
         with st.expander("🛠️ Lançar Ajuste Manual / Quebra / Vencimento (Sem Nota Fiscal)"):
             st.caption(
-                "Use este formulário para registrar perdas (garrafa quebrada, produto vencido, consumo interno) "
+                "Registre perdas (garrafa quebrada, produto vencido, consumo interno) "
                 "ou acertos de contagem física na data exata em que ocorreram."
             )
             opcoes_sku = {
@@ -548,7 +583,7 @@ def main():
             "2. Processe os XMLs\n"
             "3. Ajuste Caixas → Unidades\n"
             "4. Analise Compras e Rupturas\n"
-            "5. Salve e Dispare no WhatsApp"
+            "5. Grave o Fechamento & Envie WhatsApp"
         )
 
     st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
