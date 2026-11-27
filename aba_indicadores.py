@@ -748,7 +748,6 @@ def renderizar_aba_indicadores():
                 "DMD_Exib",
                 "Previsao_Ruptura",
                 "Compra_Exib",
-                "Investimento_Compra_RS",
             ]
             st.dataframe(
                 df_exib_comprador[cols_simples].rename(
@@ -762,12 +761,8 @@ def renderizar_aba_indicadores():
                         "DMD_Exib": "Venda / Dia",
                         "Previsao_Ruptura": "Quando Acaba?",
                         "Compra_Exib": "Sugestão Compra",
-                        "Investimento_Compra_RS": "Custo Est. Compra (R$)",
                     }
                 ),
-                column_config={
-                    "Custo Est. Compra (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                },
                 use_container_width=True,
                 hide_index=True,
             )
