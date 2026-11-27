@@ -59,7 +59,7 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
         linhas = [
             f"📊 RESUMO EXECUTIVO — {nome_loja.upper()}",
             f"{saudacao} Confira o raio-X rápido do estoque:\n",
-            f"• SKUs monitorados: {total_skus}",
+            f"• EANs monitorados: {total_skus}",
             f"• Em Ruptura (Comprar urgente): {em_ruptura} itens",
             f"• Parados (Conferir gôndola): {parados} itens\n",
             "🏆 Mais vendidos do período:",
@@ -70,9 +70,9 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
 
 
 def _preparar_csv_proximo_ciclo(df_fonte: pd.DataFrame) -> bytes:
-    """Formata o saldo atual como 'Qtd Inicial' para ser usado na Etapa 1 do próximo ciclo."""
+    """Formata o saldo atual como 'Qtd Inicial' indexado por EAN para a Etapa 1 do próximo ciclo."""
     df_export = pd.DataFrame()
-    df_export["SKU"] = df_fonte["SKU"]
+    df_export["EAN"] = df_fonte["SKU"]
     df_export["Descrição"] = df_fonte.get("Descrição", "")
     df_export["Categoria"] = df_fonte.get("Categoria", "Geral")
     df_export["Marca"] = df_fonte.get("Marca", "Sem Marca")
