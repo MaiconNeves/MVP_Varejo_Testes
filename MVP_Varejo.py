@@ -53,24 +53,24 @@ def _limpar_texto_coluna(nome: str) -> str:
     return "_".join(texto.split())
 
 
-def _padronizar_ean(serie: pd.Series) -> pd.Series:
-    """Padroniza códigos EAN/GTIN removendo espaços, sufixos '.0' e zeros excedentes à esquerda (ex: EAN-14 com 0 na frente)."""
-    s = (
-        serie.astype(str)
-        .str.strip()
-        .str.replace(r"\.0$", "", regex=True)
-    )
-    # Normaliza GTIN-14 com zero inicial para EAN-13 padrão quando aplicável
-    s = s.apply(lambda x: x[1:] if (x.isdigit() and len(x) == 14 and x.startswith("0")) else x)
-    return s
-
-
-def _eh_ean_valido(valor: str) -> bool:
-    """Verifica se o código EAN/GTIN extraído é válido e não é 'SEM GTIN' ou vazio."""
-    v = str(valor).strip().upper()
-    if not v or v in {"SEM GTIN", "NAN", "NONE", "0"}:
-        return False
-    return v.isdigit() and len(v) >= 8
+def _padronizar_ean(valor) -> str:
+    """Normaliza EAN/GTIN: trata notação científica do Excel, remove '.0' e padroniza GTIN-14 para EAN-13."""
+    if pd.isna(valor):
+        return ""
+    s = str(valor).strip().upper()
+    if s in ("", "NAN", "NONE", "SEM GTIN", "0"):
+        return ""
+    if "E+" in s or "E-" in s:
+        try:
+            s = f"{float(s.replace(',', '.')):.0f}"
+        except Exception:
+            pass
+    if s.endswith(".0"):
+        s = s[:-2]
+    apenas_digitos = "".join(ch for ch in s if ch.isdigit())
+    if len(apenas_digitos) == 14 and apenas_digitos.startswith("0"):
+        apenas_digitos = apenas_digitos[1:]
+    return apenas_digitos if len(apenas_digitos) >= 8 else ""
 
 
 def _carregar_planilha_universal(arquivo) -> pd.DataFrame:
@@ -109,7 +109,7 @@ def _normalizar_colunas_planilha(df_raw: pd.DataFrame) -> pd.DataFrame:
     mapa_sinonimos = {
         "SKU": {
             "ean", "gtin", "cean", "cod_barras", "codigo_de_barras", "codigo_barras",
-            "sku", "codigo", "cod", "cod_produto", "codigo_produto", "id_produto", "item_id"
+            "sku", "codigo", "cod", "cod_produto", "codigo_produto", "cprod", "id_produto", "item_id"
         },
         "Descrição": {
             "descricao", "produto", "nome", "nome_produto", "xprod", "item",
@@ -148,39 +148,89 @@ def _normalizar_colunas_planilha(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns=renomear)
 
     if "Qtd Inicial" in df.columns:
-        df["Qtd Inicial"] = (
-            df["Qtd Inicial"]
-            .astype(str)
-            .str.strip()
-            .str.replace(".", "", regex=False)
-            .str.replace(",", ".", regex=False)
-        )
+        if df["Qtd Inicial"].dtype == object:
+            df["Qtd Inicial"] = (
+                df["Qtd Inicial"]
+                .astype(str)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+            )
         df["Qtd Inicial"] = pd.to_numeric(df["Qtd Inicial"], errors="coerce").fillna(0.0)
 
     if "SKU" in df.columns:
-        df["SKU"] = _padronizar_ean(df["SKU"])
+        ean_pad = df["SKU"].apply(_padronizar_ean)
+        raw_pad = df["SKU"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+        df["SKU"] = ean_pad.where(ean_pad != "", raw_pad)
         df = df[df["SKU"].notna() & (df["SKU"] != "") & (df["SKU"].str.lower() != "nan")]
 
     return df
 
 
-def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | None, list[dict], int]:
-    """
-    Faz o parsing de XML de NF-e (mod 55) ou NFC-e (mod 65) utilizando EXCLUSIVAMENTE o código EAN/GTIN
-    (cEAN ou cEANTrib) como chave SKU para unificar compras de fornecedores distintos.
-    """
+def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | None, list[dict]]:
+    """Faz o parsing de XML de NF-e (mod 55), NFC-e (mod 65) e CF-e SAT (<infCFe>)."""
     try:
         root = ET.fromstring(conteudo_bytes)
     except ET.ParseError:
-        return None, [], 0
+        return None, []
 
     for elem in root.iter():
         if "}" in elem.tag:
             elem.tag = elem.tag.split("}", 1)[-1]
 
+    # Suporte para CF-e SAT (muito usado em vendas/saídas no varejo)
+    inf_cfe = root.find(".//infCFe")
+    if inf_cfe is not None:
+        chave_acesso = inf_cfe.attrib.get("Id", "").replace("CFe", "").strip() or nome_arquivo
+        ide = inf_cfe.find("ide")
+        d_emi = ide.findtext("dEmi", default="") if ide is not None else ""
+        if len(d_emi) == 8 and d_emi.isdigit():
+            data_emissao = f"{d_emi[:4]}-{d_emi[4:6]}-{d_emi[6:8]}"
+        else:
+            data_emissao = datetime.now().strftime("%Y-%m-%d")
+
+        itens = []
+        for idx_det, det in enumerate(inf_cfe.findall("det"), start=1):
+            prod = det.find("prod")
+            if prod is None:
+                continue
+
+            num_item = det.attrib.get("nItem", str(idx_det))
+            c_ean = _padronizar_ean(prod.findtext("cEAN"))
+            c_prod = (prod.findtext("cProd") or "").strip()
+            sku = c_ean if c_ean else c_prod
+            if not sku:
+                continue
+
+            descricao = (prod.findtext("xProd") or "Produto sem descrição").strip()
+            u_com = (prod.findtext("uCom") or "UN").strip().upper()
+            q_com = float(prod.findtext("qCom") or 0.0)
+            v_un_com = float(prod.findtext("vUnCom") or 0.0)
+            v_prod = float(prod.findtext("vProd") or (q_com * v_un_com))
+
+            itens.append(
+                {
+                    "Chave_NFe": chave_acesso,
+                    "Item": num_item,
+                    "Modelo": "59",
+                    "Tipo": "Saída",
+                    "Data_Emissao": data_emissao,
+                    "Data": data_emissao,
+                    "SKU": sku,
+                    "Codigo_Fornecedor": c_prod,
+                    "EAN": c_ean,
+                    "Descrição": descricao,
+                    "Unidade": u_com,
+                    "Quantidade": q_com,
+                    "Valor_Unitario": v_un_com,
+                    "Valor_Total": v_prod,
+                }
+            )
+        return chave_acesso, itens
+
+    # Suporte padrão NF-e (mod 55) e NFC-e (mod 65)
     inf_nfe = root.find(".//infNFe")
     if inf_nfe is None:
-        return None, [], 0
+        return None, []
 
     chave_acesso = inf_nfe.attrib.get("Id", "").replace("NFe", "").strip()
     if not chave_acesso:
@@ -195,30 +245,21 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
     tipo_mov = "Saída" if (mod == "65" or tp_nf == "1") else "Entrada"
 
     itens = []
-    itens_sem_ean = 0
-
     for idx_det, det in enumerate(inf_nfe.findall("det"), start=1):
         prod = det.find("prod")
         if prod is None:
             continue
 
         num_item = det.attrib.get("nItem", str(idx_det))
-        c_ean = (prod.findtext("cEAN") or "").strip()
-        c_ean_trib = (prod.findtext("cEANTrib") or "").strip()
+        c_ean = _padronizar_ean(prod.findtext("cEAN"))
+        c_ean_trib = _padronizar_ean(prod.findtext("cEANTrib"))
         c_prod = (prod.findtext("cProd") or "").strip()
 
-        # Cruzamento estrito por EAN (prioriza cEAN; se ausente, tenta cEANTrib)
-        ean_escolhido = ""
-        if _eh_ean_valido(c_ean):
-            ean_escolhido = c_ean
-        elif _eh_ean_valido(c_ean_trib):
-            ean_escolhido = c_ean_trib
-
-        if not ean_escolhido:
-            itens_sem_ean += 1
+        ean_valido = c_ean or c_ean_trib
+        sku = ean_valido if ean_valido else c_prod
+        if not sku:
             continue
 
-        sku_ean = _padronizar_ean(pd.Series([ean_escolhido])).iloc[0]
         descricao = (prod.findtext("xProd") or "Produto sem descrição").strip()
         u_com = (prod.findtext("uCom") or "UN").strip().upper()
         q_com = float(prod.findtext("qCom") or 0.0)
@@ -233,9 +274,9 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
                 "Tipo": tipo_mov,
                 "Data_Emissao": data_emissao,
                 "Data": data_emissao,
-                "SKU": sku_ean,
-                "EAN": sku_ean,
+                "SKU": sku,
                 "Codigo_Fornecedor": c_prod,
+                "EAN": ean_valido,
                 "Descrição": descricao,
                 "Unidade": u_com,
                 "Quantidade": q_com,
@@ -244,7 +285,7 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
             }
         )
 
-    return chave_acesso, itens, itens_sem_ean
+    return chave_acesso, itens
 
 
 def _extrair_arquivos_xml(arquivos_enviados) -> list[tuple[str, bytes]]:
@@ -264,7 +305,7 @@ def _extrair_arquivos_xml(arquivos_enviados) -> list[tuple[str, bytes]]:
 
 
 def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: str):
-    """Lê, normaliza e permite mapeamento manual caso o cliente envie colunas com nomes diferentes."""
+    """Lê, normaliza por EAN e permite mapeamento manual caso o cliente envie colunas com nomes diferentes."""
     try:
         df_bruto = _carregar_planilha_universal(arquivo_enviado)
         df_norm = _normalizar_colunas_planilha(df_bruto)
@@ -272,7 +313,7 @@ def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: s
         if "SKU" not in df_norm.columns or "Qtd Inicial" not in df_norm.columns:
             st.warning(
                 "Algumas colunas vieram com nomes diferentes do padrão. "
-                "Selecione abaixo qual coluna corresponde ao **EAN / Código de Barras** e ao **Saldo Inicial**:"
+                "Selecione abaixo quais colunas correspondem ao **EAN / Código de Barras** e ao **Saldo Inicial**:"
             )
             colunas_originais = list(df_bruto.columns)
             c_m1, c_m2, c_m3 = st.columns(3)
@@ -309,7 +350,7 @@ def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: s
 def _renderizar_etapa_1_ponto_partida():
     st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Contínuo)")
     st.caption(
-        "Escolha iniciar por uma planilha de contagem inicial (indexada por EAN) ou continuar a partir do arquivo exportado no ciclo anterior."
+        "Escolha iniciar por uma planilha de contagem inicial (por EAN) ou continuar a partir do arquivo exportado no ciclo anterior."
     )
 
     opcao = st.radio(
@@ -345,7 +386,7 @@ def _renderizar_etapa_1_ponto_partida():
         col2.download_button(
             label="📥 Baixar Modelo de Planilha Inicial (.CSV)",
             data=modelo_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
-            file_name="modelo_estoque_inicial_ean.csv",
+            file_name="modelo_estoque_inicial.csv",
             mime="text/csv",
         )
 
@@ -354,10 +395,9 @@ def _renderizar_etapa_1_ponto_partida():
 
 
 def _renderizar_etapa_2_xmls():
-    st.header("2. Processamento de XMLs (Cruzamento Exclusivo por EAN)")
+    st.header("2. Processamento de XMLs (Cruzamento por EAN)")
     st.caption(
-        "Suba os arquivos XML individuais ou pastas compactadas (.ZIP) das notas de compra (NF-e) e vendas no caixa (NFC-e). "
-        "Todos os itens serão unificados exclusivamente pelo código de barras (EAN/GTIN)."
+        "Suba os arquivos XML individuais ou pastas compactadas (.ZIP) das notas de compra (NF-e) e vendas no caixa (NFC-e / SAT)."
     )
 
     c_ent, c_sai = st.columns(2)
@@ -368,7 +408,7 @@ def _renderizar_etapa_2_xmls():
         key="up_xml_entradas",
     )
     files_saida = c_sai.file_uploader(
-        "🧾 XMLs / ZIPs de SAÍDA (Vendas / NFC-e / NF-e):",
+        "🧾 XMLs / ZIPs de SAÍDA (Vendas / NFC-e / SAT):",
         type=["xml", "zip"],
         accept_multiple_files=True,
         key="up_xml_saidas",
@@ -379,39 +419,38 @@ def _renderizar_etapa_2_xmls():
             st.warning("Envie pelo menos um arquivo XML ou ZIP de entrada ou saída.")
             return
 
-        with st.spinner("Lendo notas fiscais e unificando movimentações por EAN..."):
+        with st.spinner("Lendo notas fiscais e consolidando movimentações por EAN..."):
             todos_itens = []
             chaves_vistas = set()
-            total_ignorados_sem_ean = 0
 
             for arq_nome, arq_bytes in _extrair_arquivos_xml(files_entrada or []):
-                chave, itens, sem_ean = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
-                total_ignorados_sem_ean += sem_ean
-                if chave and chave not in chaves_vistas:
-                    chaves_vistas.add(chave)
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                chave_grupo = (chave, "Entrada")
+                if chave and chave_grupo not in chaves_vistas:
+                    chaves_vistas.add(chave_grupo)
                     for it in itens:
                         it["Tipo"] = "Entrada"
                         todos_itens.append(it)
 
             for arq_nome, arq_bytes in _extrair_arquivos_xml(files_saida or []):
-                chave, itens, sem_ean = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
-                total_ignorados_sem_ean += sem_ean
-                if chave and chave not in chaves_vistas:
-                    chaves_vistas.add(chave)
+                chave, itens = _ler_xml_nfe_nfce(arq_bytes, arq_nome)
+                chave_grupo = (chave, "Saída")
+                if chave and chave_grupo not in chaves_vistas:
+                    chaves_vistas.add(chave_grupo)
                     for it in itens:
                         it["Tipo"] = "Saída"
                         todos_itens.append(it)
 
             if not todos_itens:
-                st.error("Nenhum item com código EAN/GTIN válido encontrado nos XMLs enviados.")
+                st.error("Nenhum item válido encontrado nos XMLs enviados.")
                 return
 
             df_movs = pd.DataFrame(todos_itens)
 
             if "Item" in df_movs.columns and "Chave_NFe" in df_movs.columns:
-                df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Item"], keep="first")
+                df_movs = df_movs.drop_duplicates(subset=["Chave_NFe", "Tipo", "Item"], keep="first")
 
-            df_movs["SKU"] = _padronizar_ean(df_movs["SKU"])
+            df_movs["SKU"] = df_movs["SKU"].astype(str).str.strip()
 
             entradas = df_movs[df_movs["Tipo"] == "Entrada"].groupby("SKU", as_index=False).agg(
                 Total_Entradas=("Quantidade", "sum"),
@@ -440,7 +479,9 @@ def _renderizar_etapa_2_xmls():
             snap = st.session_state.get("ponto_partida")
             if snap and "df_base_proximo_ciclo" in snap:
                 df_ref = snap["df_base_proximo_ciclo"].copy()
-                df_ref["SKU"] = _padronizar_ean(df_ref["SKU"])
+                ean_ref = df_ref["SKU"].apply(_padronizar_ean)
+                raw_ref = df_ref["SKU"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+                df_ref["SKU"] = ean_ref.where(ean_ref != "", raw_ref)
 
                 agg_ref = {}
                 if "Qtd Inicial" in df_ref.columns:
@@ -462,7 +503,6 @@ def _renderizar_etapa_2_xmls():
                 ]
                 df_cons = df_cons.drop(columns=[c for c in cols_merge if c not in ("SKU", "Descrição") and c in df_cons.columns])
 
-                # Cruzamento exclusivo por EAN mantendo todos os itens da planilha e dos XMLs (outer)
                 df_cons = df_cons.merge(df_ref_unico[cols_merge], on="SKU", how="outer")
 
                 if "Descrição_x" in df_cons.columns and "Descrição_y" in df_cons.columns:
@@ -488,18 +528,20 @@ def _renderizar_etapa_2_xmls():
             st.session_state["df_movs_detalhadas"] = df_movs
             st.session_state["chaves_xml_lidas"] = chaves_vistas
 
+            qtd_itens_saida = len(df_movs[df_movs["Tipo"] == "Saída"])
+            qtd_itens_entrada = len(df_movs[df_movs["Tipo"] == "Entrada"])
             st.success(
-                f"Processamento concluído! {len(chaves_vistas)} notas fiscais lidas e {len(df_cons)} EANs consolidados."
+                f"Processamento concluído! {len(chaves_vistas)} notas lidas "
+                f"({qtd_itens_entrada} linhas de entrada e {qtd_itens_saida} linhas de saída) — {len(df_cons)} EANs consolidados."
             )
-            if total_ignorados_sem_ean > 0:
-                st.info(f"ℹ️ {total_ignorados_sem_ean} linha(s) de item nos XMLs estavam sem código EAN/GTIN válido e foram ignoradas.")
 
     if not st.session_state["df_xml_consolidado"].empty:
         df_exib = st.session_state["df_xml_consolidado"]
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Notas Fiscais Lidas", len(st.session_state["chaves_xml_lidas"]))
         m2.metric("EANs Consolidados", len(df_exib))
-        m3.metric("Total Unidades Vendidas", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
+        m3.metric("Total Entradas (UN)", f"{df_exib['Total_Entradas'].sum():,.0f}".replace(",", "."))
+        m4.metric("Total Saídas (UN)", f"{df_exib['Total_Saidas'].sum():,.0f}".replace(",", "."))
         st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
 
         st.divider()
@@ -537,8 +579,8 @@ def _renderizar_etapa_2_xmls():
                     "Data_Emissao": data_str,
                     "Data": data_str,
                     "SKU": sku_alvo,
-                    "EAN": sku_alvo,
                     "Codigo_Fornecedor": sku_alvo,
+                    "EAN": sku_alvo,
                     "Descrição": desc_alvo,
                     "Unidade": "UN",
                     "Quantidade": float(qtd_aj),
@@ -577,7 +619,7 @@ def main():
         loja_nome = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
         st.info(
             "**Fluxo Recomendado:**\n"
-            "1. Defina o Ponto de Partida\n"
+            "1. Defina o Ponto de Partida (EAN)\n"
             "2. Processe os XMLs\n"
             "3. Ajuste Caixas → Unidades\n"
             "4. Analise Compras e Rupturas\n"
