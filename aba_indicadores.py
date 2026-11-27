@@ -3,11 +3,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+
 def _formatar_brl(valor: float) -> str:
     """Formata um número float para moeda brasileira (R$ 1.234,56)."""
     sinal = "-" if valor < 0 else ""
     abs_val = abs(valor)
     return f"{sinal}R$ {abs_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 def _calcular_dias_sem_giro(df: pd.DataFrame, data_referencia: pd.Timestamp) -> pd.Series:
     """Calcula quantos dias se passaram desde a última saída registrada até a data de referência."""
@@ -798,11 +800,10 @@ def renderizar_aba_indicadores():
 
     # CAMADA 2: AUDITORIA TÉCNICA, KARDEX DIA A DIA E CATEGORIAS/MARCAS
     with camada_auditoria:
-        sub_kardex, sub_grupo, sub_completo, sub_evolucao = st.tabs([
+        sub_kardex, sub_grupo, sub_completo = st.tabs([
             "🔎 Extrato Diário por Produto (Kardex)",
             "🏷️ Por Categoria e Marca",
             "📑 Tabela Técnica Completa (Todas Colunas)",
-            "📈 Gráficos de Evolução Diária",
         ])
 
         with sub_kardex:
@@ -852,7 +853,6 @@ def renderizar_aba_indicadores():
                     if pd.notna(row_sku["Margem_Bruta_Pct"])
                     else "Sem custo XML",
                 )
-                st.line_chart(df_k_sku.set_index("Data")["Saldo_Fechamento"], use_container_width=True)
                 st.dataframe(
                     df_k_sku[
                         [
@@ -911,14 +911,6 @@ def renderizar_aba_indicadores():
                     delta=f"Compra sugerida: {int(df_grupo['Sugestao_Compra_Un'].sum())} un.",
                     delta_color="off",
                 )
-                chart_df = df_grupo.set_index(visao_grupo)[["Faturamento_RS", "Lucro_Bruto_RS", "Venda_Perdida_Hist_RS"]].rename(
-                    columns={
-                        "Faturamento_RS": "Faturamento Realizado (R$)",
-                        "Lucro_Bruto_RS": "Lucro Bruto (R$)",
-                        "Venda_Perdida_Hist_RS": "Venda Perdida Passado (R$)",
-                    }
-                )
-                st.bar_chart(chart_df, use_container_width=True)
                 df_grupo_exib = df_grupo.copy()
                 df_grupo_exib["Margem_Bruta_Exib"] = df_grupo_exib["Margem_Bruta_Pct"].apply(
                     lambda x: f"{x:.1f}%" if pd.notna(x) else "Sem custo"
@@ -977,28 +969,3 @@ def renderizar_aba_indicadores():
                 mime="text/csv",
                 use_container_width=True,
             )
-
-        with sub_evolucao:
-            if df_movs is not None and not df_movs.empty and "Data_Emissao" in df_movs.columns:
-                df_saidas_dia = df_movs[
-                    (df_movs["Tipo"] == "Saída") & (df_movs["Data_Emissao"] != "")
-                ].copy()
-                if not df_saidas_dia.empty:
-                    st.subheader("Evolução Diária de Vendas (Unidades)")
-                    resumo_diario = (
-                        df_saidas_dia.groupby("Data_Emissao", as_index=False)["Quantidade"]
-                        .sum()
-                        .sort_values("Data_Emissao")
-                    )
-                    st.bar_chart(resumo_diario.set_index("Data_Emissao")["Quantidade"])
-            if not df_kardex_completo.empty:
-                st.subheader("Evolução Diária de Produtos em Ruptura (Prateleira Vazia)")
-                ruptura_por_dia = (
-                    df_kardex_completo.assign(
-                        Em_Ruptura=lambda d: np.where(d["Situacao_Dia"] == "🔴 Zerado / Ruptura", 1, 0)
-                    )
-                    .groupby("Data", as_index=False)["Em_Ruptura"]
-                    .sum()
-                    .sort_values("Data")
-                )
-                st.line_chart(ruptura_por_dia.set_index("Data")["Em_Ruptura"])
