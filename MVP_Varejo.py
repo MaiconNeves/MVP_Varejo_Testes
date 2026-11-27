@@ -8,11 +8,7 @@ import streamlit as st
 
 from aba_conversao import renderizar_aba_conversao
 from aba_indicadores import renderizar_aba_indicadores
-from aba_whatsapp_db import (
-    carregar_ultimo_snapshot_loja,
-    listar_lojas_ativas,
-    renderizar_aba_whatsapp_db,
-)
+from aba_whatsapp_db import renderizar_aba_fechamento
 
 try:
     from aba_coleta import renderizar_aba_coleta
@@ -157,7 +153,7 @@ def _ler_xml_nfe_nfce(conteudo_bytes: bytes, nome_arquivo: str) -> tuple[str | N
 
     for elem in root.iter():
         if "}" in elem.tag:
-            elem.tag = elem.tag.split("}", 1)[1]
+            elem.tag = elem.tag.split("}", 1)[-1]
 
     inf_nfe = root.find(".//infNFe")
     if inf_nfe is None:
@@ -278,57 +274,19 @@ def _processar_upload_planilha(arquivo_enviado, origem_label: str, key_prefix: s
 def _renderizar_etapa_1_ponto_partida():
     st.header("1. Ponto de Partida (Estoque Inicial ou Ciclo Contínuo)")
     st.caption(
-        "Escolha iniciar por uma planilha de contagem/ciclo ou puxar automaticamente o último fechamento salvo no Banco na Nuvem."
+        "Escolha iniciar por uma planilha de contagem inicial ou continuar a partir do arquivo exportado no ciclo anterior."
     )
 
     opcao = st.radio(
         "Como deseja iniciar este ciclo?",
         options=[
-            "🔄 Puxar Último Saldo Salvo do Banco (Supabase / Nuvem)",
             "📄 Subir Planilha de Contagem Inicial (.XLSX, .CSV, .ODS)",
             "📂 Continuar do Ciclo Anterior via Arquivo (.CSV ou .XLSX)",
         ],
         horizontal=True,
     )
 
-    if opcao.startswith("🔄 Puxar Último Saldo"):
-        df_lojas = listar_lojas_ativas()
-        if df_lojas.empty:
-            st.info(
-                "Nenhuma loja com fechamento salvo encontrada no banco ainda. "
-                "Faça o primeiro ciclo subindo uma planilha ao lado e grave o fechamento na **Aba 5 (Alertas WhatsApp & Banco)**."
-            )
-        else:
-            opcoes_l = {
-                f"{r['loja_id']} — {r['nome_fantasia']}": r["loja_id"]
-                for _, r in df_lojas.iterrows()
-            }
-            c_l1, c_l2 = st.columns([2.5, 1.5])
-            loja_escolhida_label = c_l1.selectbox(
-                "Selecione o Cliente / Mercado cadastrado:",
-                list(opcoes_l.keys()),
-                key="sel_loja_puxar_saldo",
-            )
-            c_l2.write("")
-            c_l2.write("")
-            if c_l2.button("⬇️ Carregar Último Saldo do Banco", type="primary", use_container_width=True):
-                id_alvo = opcoes_l[loja_escolhida_label]
-                df_snap, data_snap = carregar_ultimo_snapshot_loja(id_alvo)
-                if df_snap.empty:
-                    st.warning(f"A loja **{loja_escolhida_label}** ainda não possui fechamento (snapshot) gravado no banco.")
-                else:
-                    st.session_state["ponto_partida"] = {
-                        "origem": f"banco_nuvem_{id_alvo}",
-                        "data_corte": data_snap,
-                        "df_base_proximo_ciclo": df_snap,
-                    }
-                    st.success(
-                        f"✅ Último fechamento carregado com sucesso! **{len(df_snap)} SKUs** recuperados "
-                        f"(Data do fechamento: **{data_snap}**). Agora suba na **Etapa 2** apenas os XMLs posteriores a essa data!"
-                    )
-                    st.dataframe(df_snap.head(15), use_container_width=True, hide_index=True)
-
-    elif opcao.startswith("📂 Continuar"):
+    if opcao.startswith("📂 Continuar"):
         arq_ciclo = st.file_uploader(
             "Suba o arquivo do fechamento anterior (.CSV, .XLSX, .XLS ou .ODS):",
             type=["csv", "xlsx", "xls", "ods"],
@@ -574,7 +532,7 @@ def main():
 
     with st.sidebar:
         st.title("🛒 Varejo Inteligente")
-        st.caption("Copiloto de Compras e Prevenção de Ruptura")
+        st.caption("Copiloto de Compras e Prevenção de Ruptura (Modo Testes)")
         st.divider()
         loja_nome = st.text_input("Loja / Unidade em Análise:", value="Loja 01 - Matriz")
         st.info(
@@ -583,7 +541,7 @@ def main():
             "2. Processe os XMLs\n"
             "3. Ajuste Caixas → Unidades\n"
             "4. Analise Compras e Rupturas\n"
-            "5. Grave o Fechamento & Envie WhatsApp"
+            "5. Exporte o Fechamento (.CSV)"
         )
 
     st.title(f"Gestão Inteligente de Estoque — {loja_nome}")
@@ -593,7 +551,7 @@ def main():
         "2. Processar XMLs",
         "3. De-Para (Conversão CX→UN)",
         "4. Indicadores e Kardex",
-        "5. Alertas WhatsApp & Banco",
+        "5. Fechamento e Resumo",
     ]
     if TEM_ABA_ENTRADAS_SAIDAS:
         nomes_abas.append("6. Entradas x Saídas")
@@ -615,7 +573,7 @@ def main():
         renderizar_aba_indicadores()
 
     with abas[4]:
-        renderizar_aba_whatsapp_db(loja_nome)
+        renderizar_aba_fechamento(loja_nome)
 
     idx_extra = 5
     if TEM_ABA_ENTRADAS_SAIDAS:
