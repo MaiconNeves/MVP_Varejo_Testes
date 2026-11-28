@@ -18,18 +18,19 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
     if "Curva_ABC" not in df.columns:
         df["Curva_ABC"] = "C"
 
-    if tipo_resumo == "🚨 Ruptura Crítica (Curva A)":
+    if tipo_resumo == "🚨 Ruptura (Todos os Itens)":
         criticos = (
-            df[(df["Saldo_Calculado"] <= 0) & (df["Curva_ABC"] == "A")]
-            .sort_values(by=["DMD", "Total_Saidas"], ascending=[False, False])
-            .head(10)
+            df[df["Saldo_Calculado"] <= 0]
+            .sort_values(by=["Curva_ABC", "DMD", "Total_Saidas"], ascending=[True, False, False])
+            .head(20)
         )
         if criticos.empty:
-            return f"✅ {nome_loja.upper()} — Nenhum item da Curva A está em ruptura hoje."
+            return f"✅ {nome_loja.upper()} — Nenhum item está em ruptura hoje."
 
         linhas = [
             f"🚨 ALERTA DE RUPTURA — {nome_loja.upper()}",
-            f"{saudacao} Estes itens campeões de venda (Curva A) estão ZERADOS / EM RUPTURA agora:\n",
+            f"{saudacao} Estes itens estão ZERADOS / EM RUPTURA agora (todas as curvas):
+",
         ]
         for _, r in criticos.iterrows():
             dmd = float(r["DMD"])
@@ -39,7 +40,7 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
                 sug_calc = max(1.0, round(dmd * cob_alvo - float(r["Saldo_Calculado"])))
             sug = int(round(sug_calc))
 
-            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {r.get('Curva_ABC', 'A')})")
+            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {r.get('Curva_ABC', '-')})")
             linhas.append(f"  Venda média: {dmd:.2f}/dia | Sugestão compra: {sug} un")
         return "\n".join(linhas)
 
@@ -147,7 +148,7 @@ def renderizar_aba_fechamento(loja_nome_padrao: str = "Loja 01 - Matriz"):
     tipo_resumo = st.radio(
         "Selecione o modelo de resumo:",
         options=[
-            "🚨 Ruptura Crítica (Curva A)",
+            "🚨 Ruptura (Todos os Itens)",
             "📦 Estoque Parado / Gôndola",
             "📊 Resumo Executivo do Dia",
         ],
