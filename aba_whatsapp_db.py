@@ -1,11 +1,23 @@
 from datetime import datetime
+import re
+import urllib.parse
 import pandas as pd
 import streamlit as st
 from aba_indicadores import calcular_indicadores_estoque
 
 
+def _limpar_telefone_whatsapp(telefone: str) -> str:
+    """Remove caracteres especiais e garante o DDI 55 (Brasil) se omitido."""
+    digitos = re.sub(r"\D", "", str(telefone or ""))
+    if not digitos:
+        return ""
+    if len(digitos) in (10, 11):
+        digitos = "55" + digitos
+    return digitos
+
+
 def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFrame, tipo_resumo: str) -> str:
-    """Gera texto de resumo gerencial para revisão/cópia durante os testes."""
+    """Gera texto de resumo gerencial para envio via WhatsApp."""
     saudacao = f"Olá {responsavel}!" if responsavel else "Olá!"
     df = df_ind.copy()
 
@@ -25,10 +37,10 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
             .head(20)
         )
         if criticos.empty:
-            return f"✅ {nome_loja.upper()} — Nenhum item está em ruptura hoje."
+            return f"✅ *{nome_loja.upper()}* — Nenhum item está em ruptura hoje."
 
         linhas = [
-            f"🚨 ALERTA DE RUPTURA — {nome_loja.upper()}",
+            f"🚨 *ALERTA DE RUPTURA — {nome_loja.upper()}*",
             f"{saudacao} Estes itens estão ZERADOS / EM RUPTURA agora:\n",
         ]
         for _, r in criticos.iterrows():
@@ -40,8 +52,8 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
             sug = int(round(sug_calc))
             curva = r.get("Curva_ABC", "C")
 
-            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {curva})")
-            linhas.append(f"  Venda média: {dmd:.2f}/dia | Sugestão compra: {sug} un")
+            linhas.append(f"• *{r.get('Descrição', r.get('SKU', 'Produto'))}* (Curva {curva})")
+            linhas.append(f"  Venda média: {dmd:.2f}/dia | Sugestão compra: *{sug} un*")
         return "\n".join(linhas)
 
     elif tipo_resumo == "📦 Estoque Parado / Gôndola":
@@ -51,14 +63,14 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
             .head(15)
         )
         if parados.empty:
-            return f"✅ {nome_loja.upper()} — Nenhum item parado com saldo positivo encontrado."
+            return f"✅ *{nome_loja.upper()}* — Nenhum item parado com saldo positivo encontrado."
 
         linhas = [
-            f"📦 ITENS PARADOS — {nome_loja.upper()}",
+            f"📦 *ITENS PARADOS — {nome_loja.upper()}*",
             f"{saudacao} Itens com saldo em estoque mas sem vendas no período:\n",
         ]
         for _, r in parados.iterrows():
-            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} — Saldo: {r['Saldo_Calculado']:.0f} un")
+            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} — Saldo: *{r['Saldo_Calculado']:.0f} un*")
         return "\n".join(linhas)
 
     else:
@@ -68,12 +80,12 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
         top_venda = df.sort_values(by="Total_Saidas", ascending=False).head(5)
 
         linhas = [
-            f"📊 RESUMO EXECUTIVO — {nome_loja.upper()}",
+            f"📊 *RESUMO EXECUTIVO — {nome_loja.upper()}*",
             f"{saudacao} Confira o raio-X rápido do estoque:\n",
-            f"• EANs monitorados: {total_skus}",
-            f"• Em Ruptura (Comprar urgente): {em_ruptura} itens",
-            f"• Parados (Conferir gôndola): {parados} itens\n",
-            "🏆 Mais vendidos do período:",
+            f"• EANs monitorados: *{total_skus}*",
+            f"• Em Ruptura (Comprar urgente): *{em_ruptura} itens*",
+            f"• Parados (Conferir gôndola): *{parados} itens*\n",
+            "🏆 *Mais vendidos do período:*",
         ]
         for _, r in top_venda.iterrows():
             linhas.append(f"  - {r.get('Descrição', r.get('SKU', ''))} ({int(r['Total_Saidas'])} un)")
@@ -95,16 +107,21 @@ def _preparar_csv_proximo_ciclo(df_fonte: pd.DataFrame) -> bytes:
 
 
 def renderizar_aba_fechamento(loja_nome_padrao: str = "Loja 01 - Matriz"):
-    st.header("📋 Fechamento de Ciclo e Resumo Gerencial (Modo Testes)")
-    st.info("🧪 **Modo de Testes Ativo:** Banco de dados e disparos de WhatsApp desativados temporariamente.")
+    st.header("📲 Fechamento de Ciclo e Envio via WhatsApp")
 
-    c1, c2 = st.columns([2, 1.5])
+    c1, c2, c3 = st.columns([1.8, 1.4, 1.4])
     nome_loja = c1.text_input("Nome da Loja / Unidade:", value=loja_nome_padrao, key="teste_nome_loja")
-    responsavel = c2.text_input("Responsável / Comprador (opcional):", placeholder="Ex: Seu José", key="teste_resp")
+    responsavel = c2.text_input("Responsável / Comprador:", placeholder="Ex: Seu José", key="teste_resp")
+    telefone_raw = c3.text_input(
+        "WhatsApp Destino (com DDD):",
+        placeholder="Ex: 15999998888",
+        help="Digite apenas números com DDD. O código do Brasil (+55) é adicionado automaticamente.",
+        key="whats_destino",
+    )
 
     df_cons = st.session_state.get("df_xml_consolidado", pd.DataFrame())
     if df_cons.empty:
-        st.warning("⚠️ Processe os XMLs na **Etapa 2** para liberar a exportação do fechamento e o resumo.")
+        st.warning("⚠️ Processe os XMLs na **Etapa 2** para liberar a exportação do fechamento e o envio por WhatsApp.")
         return
 
     df_fonte = st.session_state.get("df_indicadores_calculados")
@@ -126,10 +143,50 @@ def renderizar_aba_fechamento(loja_nome_padrao: str = "Loja 01 - Matriz"):
         st.session_state["df_indicadores_calculados"] = df_fonte.copy()
 
     st.divider()
-    st.subheader("1. Exportar Arquivo para Continuar Próximo Ciclo")
+    st.subheader("1. Enviar Resumo Gerencial pelo WhatsApp")
+    tipo_resumo = st.radio(
+        "Selecione o modelo de mensagem:",
+        options=[
+            "🚨 Ruptura (Todos os Itens)",
+            "📦 Estoque Parado / Gôndola",
+            "📊 Resumo Executivo do Dia",
+        ],
+        horizontal=True,
+    )
+
+    texto_gerado = montar_resumo_executivo(nome_loja, responsavel, df_fonte, tipo_resumo)
+    texto_editavel = st.text_area(
+        "Edite a mensagem antes de enviar (se desejar):",
+        value=texto_gerado,
+        height=240,
+    )
+
+    telefone_limpo = _limpar_telefone_whatsapp(telefone_raw)
+    texto_codificado = urllib.parse.quote(texto_editavel)
+
+    col_btn1, col_btn2 = st.columns(2)
+    if telefone_limpo:
+        url_whats = f"https://wa.me{telefone_limpo}?text={texto_codificado}"
+        col_btn1.link_button(
+            label=f"📲 Enviar para +{telefone_limpo} no WhatsApp",
+            url=url_whats,
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        col_btn1.info("💡 Preencha o **WhatsApp Destino** acima para liberar o envio direto ao contato.")
+
+    url_whats_compartilhar = f"https://whatsapp.com{texto_codificado}"
+    col_btn2.link_button(
+        label="📤 Escolher Contato / Grupo no WhatsApp",
+        url=url_whats_compartilhar,
+        use_container_width=True,
+    )
+
+    st.divider()
+    st.subheader("2. Exportar Arquivo para Continuar Próximo Ciclo")
     st.caption(
-        "Como o banco de dados está desligado nos testes, baixe este arquivo para usá-lo na "
-        "**Etapa 1 (Continuar do Ciclo Anterior)** na próxima rodada."
+        "Baixe este arquivo para usá-lo na **Etapa 1 (Continuar do Ciclo Anterior)** na próxima rodada."
     )
 
     data_hoje = datetime.now().strftime("%Y%m%d_%H%M")
@@ -140,24 +197,4 @@ def renderizar_aba_fechamento(loja_nome_padrao: str = "Loja 01 - Matriz"):
         data=csv_bytes,
         file_name=f"fechamento_estoque_{data_hoje}.csv",
         mime="text/csv",
-        type="primary",
-    )
-
-    st.divider()
-    st.subheader("2. Pré-visualização do Resumo Gerencial")
-    tipo_resumo = st.radio(
-        "Selecione o modelo de resumo:",
-        options=[
-            "🚨 Ruptura (Todos os Itens)",
-            "📦 Estoque Parado / Gôndola",
-            "📊 Resumo Executivo do Dia",
-        ],
-        horizontal=True,
-    )
-
-    texto_gerado = montar_resumo_executivo(nome_loja, responsavel, df_fonte, tipo_resumo)
-    st.text_area(
-        "Texto gerado (apenas visualização local):",
-        value=texto_gerado,
-        height=240,
     )
