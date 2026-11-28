@@ -3,11 +3,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+
 def _formatar_brl(valor: float) -> str:
     """Formata um número float para moeda brasileira (R$ 1.234,56)."""
     sinal = "-" if valor < 0 else ""
     abs_val = abs(valor)
     return f"{sinal}R$ {abs_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 def _calcular_dias_sem_giro(df: pd.DataFrame, data_referencia: pd.Timestamp) -> pd.Series:
     """Calcula quantos dias se passaram desde a última saída registrada até a data de referência."""
@@ -630,6 +632,8 @@ def renderizar_aba_indicadores():
         margem_alvo_padrao=float(margem_alvo_padrao),
     )
 
+    st.session_state["df_indicadores_calculados"] = df_ind.copy()
+
     faturamento_total = float(df_ind["Valor_Saidas"].sum())
     perda_ruptura_total = float(df_ind["Perda_Financeira_Hist"].sum())
     capital_parado_excesso = float(
@@ -766,7 +770,7 @@ def renderizar_aba_indicadores():
                     "Previsao_Ruptura": "Quando Acaba?",
                     "Compra_Exib": "Sugestão Compra",
                 }
-                col_config_simples = {
+                col_cfg = {
                     "Faturamento (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
                     "% Receita": st.column_config.NumberColumn(format="%.2f%%"),
                 }
@@ -793,11 +797,11 @@ def renderizar_aba_indicadores():
                     "Previsao_Ruptura": "Quando Acaba?",
                     "Compra_Exib": "Sugestão Compra",
                 }
-                col_config_simples = None
+                col_cfg = {}
 
             st.dataframe(
                 df_exib_comprador[cols_simples].rename(columns=rename_simples),
-                column_config=col_config_simples,
+                column_config=col_cfg,
                 use_container_width=True,
                 hide_index=True,
             )
