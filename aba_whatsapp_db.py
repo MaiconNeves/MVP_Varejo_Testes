@@ -1,6 +1,7 @@
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+from aba_indicadores import calcular_indicadores_estoque
 
 
 def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFrame, tipo_resumo: str) -> str:
@@ -8,19 +9,19 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
     saudacao = f"Olá {responsavel}!" if responsavel else "Olá!"
     df = df_ind.copy()
 
-    for col in ["Saldo_Calculado", "DMD", "Total_Saidas"]:
+    for col in ["Saldo_Calculado", "DMD", "Total_Saidas", "Sugestao_Compra", "Cob_Alvo_Aplicada"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         else:
-            df[col] = 0.0
+            df[col] = 15.0 if col == "Cob_Alvo_Aplicada" else 0.0
 
     if "Curva_ABC" not in df.columns:
-        df["Curva_ABC"] = "A"
+        df["Curva_ABC"] = "C"
 
     if tipo_resumo == "🚨 Ruptura Crítica (Curva A)":
         criticos = (
-            df[df["Saldo_Calculado"] <= 0]
-            .sort_values(by=["Curva_ABC", "DMD"], ascending=[True, False])
+            df[(df["Saldo_Calculado"] <= 0) & (df["Curva_ABC"] == "A")]
+            .sort_values(by=["DMD", "Total_Saidas"], ascending=[False, False])
             .head(10)
         )
         if criticos.empty:
@@ -28,17 +29,26 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
 
         linhas = [
             f"🚨 ALERTA DE RUPTURA — {nome_loja.upper()}",
-            f"{saudacao} Estes itens campeões de venda estão ZERADOS / EM RUPTURA agora:\n",
+            f"{saudacao} Estes itens campeões de venda (Curva A) estão ZERADOS / EM RUPTURA agora:\n",
         ]
         for _, r in criticos.iterrows():
             dmd = float(r["DMD"])
-            sug = int(max(1, round(dmd * 15 - float(r["Saldo_Calculado"]))))
+            cob_alvo = float(r["Cob_Alvo_Aplicada"]) if float(r["Cob_Alvo_Aplicada"]) > 0 else 15.0
+            sug_calc = float(r["Sugestao_Compra"])
+            if sug_calc <= 0 and dmd > 0:
+                sug_calc = max(1.0, round(dmd * cob_alvo - float(r["Saldo_Calculado"])))
+            sug = int(round(sug_calc))
+
             linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {r.get('Curva_ABC', 'A')})")
-            linhas.append(f"  Venda média: {dmd:.1f}/dia | Sugestão compra: {sug} un")
+            linhas.append(f"  Venda média: {dmd:.2f}/dia | Sugestão compra: {sug} un")
         return "\n".join(linhas)
 
     elif tipo_resumo == "📦 Estoque Parado / Gôndola":
-        parados = df[(df["Saldo_Calculado"] > 0) & (df["Total_Saidas"] == 0)].head(15)
+        parados = (
+            df[(df["Saldo_Calculado"] > 0) & (df["Total_Saidas"] == 0)]
+            .sort_values(by="Saldo_Calculado", ascending=False)
+            .head(15)
+        )
         if parados.empty:
             return f"✅ {nome_loja.upper()} — Nenhum item parado com saldo positivo encontrado."
 
@@ -96,7 +106,23 @@ def renderizar_aba_fechamento(loja_nome_padrao: str = "Loja 01 - Matriz"):
         st.warning("⚠️ Processe os XMLs na **Etapa 2** para liberar a exportação do fechamento e o resumo.")
         return
 
-    df_fonte = st.session_state.get("df_indicadores_calculados", df_cons)
+    df_fonte = st.session_state.get("df_indicadores_calculados")
+    if df_fonte is None or df_fonte.empty or "DMD" not in df_fonte.columns:
+        df_movs = st.session_state.get("df_movs_detalhadas", pd.DataFrame())
+        dias_calc = 30
+        if df_movs is not None and not df_movs.empty and "Data_Emissao" in df_movs.columns:
+            datas_validas = pd.to_datetime(df_movs["Data_Emissao"], errors="coerce").dropna()
+            if not datas_validas.empty:
+                diff_dias = int((datas_validas.max() - datas_validas.min()).days) + 1
+                if 1 <= diff_dias <= 365:
+                    dias_calc = diff_dias
+
+        df_fonte, _ = calcular_indicadores_estoque(
+            df_consolidado=df_cons,
+            df_movs=df_movs,
+            dias_periodo=dias_calc,
+        )
+        st.session_state["df_indicadores_calculados"] = df_fonte.copy()
 
     st.divider()
     st.subheader("1. Exportar Arquivo para Continuar Próximo Ciclo")
