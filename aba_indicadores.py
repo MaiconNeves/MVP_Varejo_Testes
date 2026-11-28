@@ -609,13 +609,13 @@ def renderizar_aba_indicadores():
 
     regras_categoria_dict = {}
     for row_reg in df_regras_editado.itertuples(index=False):
-        cat_nome = str(row_reg[0]).strip()
+        cat_nome = str(row_reg).strip()
         regras_categoria_dict[cat_nome] = {
-            "min": int(row_reg[1]),
-            "alvo": int(row_reg[2]),
-            "excesso": int(row_reg[3]),
-            "deducoes_pct": float(row_reg[4]),
-            "margem_alvo_pct": float(row_reg[5]),
+            "min": int(row_reg),
+            "alvo": int(row_reg),
+            "excesso": int(row_reg),
+            "deducoes_pct": float(row_reg),
+            "margem_alvo_pct": float(row_reg),
         }
 
     df_ind, df_kardex_completo = calcular_indicadores_estoque(
@@ -740,17 +740,34 @@ def renderizar_aba_indicadores():
             df_exib_comprador["DMD_Exib"] = df_exib_comprador["DMD"].round(2)
             df_exib_comprador["Saldo_Exib"] = df_exib_comprador["Saldo_Calculado"].round(1)
             df_exib_comprador["Compra_Exib"] = df_exib_comprador["Sugestao_Compra"].astype(int)
-            cols_simples = [
-                "Status_Estoque",
-                "Curva_ABC",
-                "Categoria",
-                "SKU",
-                "Descrição",
-                "Saldo_Exib",
-                "DMD_Exib",
-                "Previsao_Ruptura",
-                "Compra_Exib",
-            ]
+
+            if visao_acao.startswith("📋"):
+                cols_simples = [
+                    "Status_Estoque",
+                    "Curva_ABC",
+                    "Categoria",
+                    "SKU",
+                    "Descrição",
+                    "Saldo_Exib",
+                    "DMD_Exib",
+                    "Valor_Saidas",
+                    "Participacao_Pct",
+                    "Previsao_Ruptura",
+                    "Compra_Exib",
+                ]
+            else:
+                cols_simples = [
+                    "Status_Estoque",
+                    "Curva_ABC",
+                    "Categoria",
+                    "SKU",
+                    "Descrição",
+                    "Saldo_Exib",
+                    "DMD_Exib",
+                    "Previsao_Ruptura",
+                    "Compra_Exib",
+                ]
+
             st.dataframe(
                 df_exib_comprador[cols_simples].rename(
                     columns={
@@ -761,10 +778,16 @@ def renderizar_aba_indicadores():
                         "Descrição": "Produto",
                         "Saldo_Exib": "Estoque Atual",
                         "DMD_Exib": "Venda / Dia",
+                        "Valor_Saidas": "Faturamento (R$)",
+                        "Participacao_Pct": "% Receita",
                         "Previsao_Ruptura": "Quando Acaba?",
                         "Compra_Exib": "Sugestão Compra",
                     }
                 ),
+                column_config={
+                    "Faturamento (R$)": st.column_config.NumberColumn("Faturamento (R$)", format="R$ %.2f"),
+                    "% Receita": st.column_config.NumberColumn("% Receita", format="%.2f%%"),
+                },
                 use_container_width=True,
                 hide_index=True,
             )
