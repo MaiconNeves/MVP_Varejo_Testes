@@ -394,6 +394,69 @@ def _renderizar_etapa_1_ponto_partida():
             _processar_upload_planilha(arq_ini, "contagem_inicial", "inicial")
 
 
+def _gravar_ajuste_manual(sku_alvo: str, desc_alvo: str, motivo_aj: str, qtd_aj: float, data_aj):
+    """Efetiva o lançamento do ajuste manual nas movimentações e no consolidado."""
+    eh_entrada = motivo_aj.endswith("(+)")
+    tipo_mov_aj = "Entrada" if eh_entrada else "Saída"
+    data_str = data_aj.strftime("%Y-%m-%d")
+
+    nova_mov = pd.DataFrame([{
+        "Chave_NFe": f"AJUSTE_{datetime.now().strftime('%H%M%S')}",
+        "Item": "1",
+        "Modelo": "AJ",
+        "Tipo": tipo_mov_aj,
+        "Data_Emissao": data_str,
+        "Data": data_str,
+        "SKU": sku_alvo,
+        "Codigo_Fornecedor": sku_alvo,
+        "EAN": sku_alvo,
+        "Descrição": desc_alvo,
+        "Unidade": "UN",
+        "Quantidade": float(qtd_aj),
+        "Valor_Unitario": 0.0,
+        "Valor_Total": 0.0,
+    }])
+
+    df_movs_atual = st.session_state.get("df_movs_detalhadas", pd.DataFrame())
+    st.session_state["df_movs_detalhadas"] = pd.concat([df_movs_atual, nova_mov], ignore_index=True)
+
+    df_cons_atual = st.session_state["df_xml_consolidado"].copy()
+    mask = df_cons_atual["SKU"] == sku_alvo
+    if eh_entrada:
+        df_cons_atual.loc[mask, "Total_Entradas"] += float(qtd_aj)
+    else:
+        df_cons_atual.loc[mask, "Total_Saidas"] += float(qtd_aj)
+
+    df_cons_atual["Saldo_Calculado"] = (
+        df_cons_atual["Qtd Inicial"]
+        + df_cons_atual["Total_Entradas"]
+        - df_cons_atual["Total_Saidas"]
+    )
+    st.session_state["df_xml_consolidado"] = df_cons_atual
+    st.session_state["msg_sucesso_ajuste"] = (
+        f"Ajuste aplicado! **{motivo_aj}** de **{qtd_aj:g} un** registrado para "
+        f"**{desc_alvo}** em {data_aj.strftime('%d/%m/%Y')}."
+    )
+
+
+@st.dialog("Confirmar Lançamento")
+def _modal_confirmar_ajuste(sku_alvo: str, desc_alvo: str, motivo_aj: str, qtd_aj: float, data_aj):
+    """Exibe a caixa de confirmação ao pressionar Enter na quantidade ou clicar no botão."""
+    st.markdown("### Deseja realmente lançar esse ajuste manual?")
+    st.info(
+        f"**Produto:** {sku_alvo} — {desc_alvo}\n\n"
+        f"**Motivo:** {motivo_aj}\n\n"
+        f"**Quantidade:** {qtd_aj:g} un\n\n"
+        f"**Data:** {data_aj.strftime('%d/%m/%Y')}"
+    )
+    col_sim, col_nao = st.columns(2)
+    if col_sim.button("✅ Sim, confirmar", type="primary", use_container_width=True):
+        _gravar_ajuste_manual(sku_alvo, desc_alvo, motivo_aj, qtd_aj, data_aj)
+        st.rerun()
+    if col_nao.button("❌ Cancelar", use_container_width=True):
+        st.rerun()
+
+
 def _renderizar_etapa_2_xmls():
     st.header("2. Processamento de XMLs (Cruzamento por EAN)")
     st.caption(
@@ -545,68 +608,35 @@ def _renderizar_etapa_2_xmls():
         st.dataframe(df_exib.head(20), use_container_width=True, hide_index=True)
 
         st.divider()
-        with st.expander("🛠️ Lançar Ajuste Manual / Quebra / Vencimento (Sem Nota Fiscal)"):
+        if "msg_sucesso_ajuste" in st.session_state:
+            st.success(st.session_state.pop("msg_sucesso_ajuste"))
+
+        with st.expander("🛠️ Lançar Ajuste Manual / Quebra / Vencimento (Sem Nota Fiscal)", expanded=True):
             st.caption(
                 "Registre perdas (garrafa quebrada, produto vencido, consumo interno) "
-                "ou acertos de contagem física na data exata em que ocorreram."
+                "ou acertos de contagem física. Digite a quantidade e pressione **Enter** para confirmar."
             )
             opcoes_sku = {
                 f"{row['SKU']} — {row['Descrição']} (Saldo atual: {row['Saldo_Calculado']:.0f})": (row["SKU"], row["Descrição"])
                 for _, row in df_exib.iterrows()
             }
 
-            c_aj1, c_aj2, c_aj3, c_aj4 = st.columns([3, 1.5, 1.5, 1.5])
-            item_sel = c_aj1.selectbox("Produto / EAN:", list(opcoes_sku.keys()), key="aj_sku_sel")
-            motivo_aj = c_aj2.selectbox(
-                "Motivo:",
-                ["Quebra / Avaria (-)", "Vencimento (-)", "Consumo Interno (-)", "Acerto Contagem (+)"],
-                key="aj_motivo",
-            )
-            qtd_aj = c_aj3.number_input("Quantidade:", min_value=0.01, value=1.0, step=1.0, key="aj_qtd")
-            data_aj = c_aj4.date_input("Data da ocorrência:", value=datetime.now().date(), format="DD/MM/YYYY", key="aj_data")
-
-            if st.button("✅ Aplicar Ajuste no Estoque", key="btn_aplicar_ajuste"):
-                sku_alvo, desc_alvo = opcoes_sku[item_sel]
-                eh_entrada = motivo_aj.endswith("(+)")
-                tipo_mov_aj = "Entrada" if eh_entrada else "Saída"
-                data_str = data_aj.strftime("%Y-%m-%d")
-
-                nova_mov = pd.DataFrame([{
-                    "Chave_NFe": f"AJUSTE_{datetime.now().strftime('%H%M%S')}",
-                    "Item": "1",
-                    "Modelo": "AJ",
-                    "Tipo": tipo_mov_aj,
-                    "Data_Emissao": data_str,
-                    "Data": data_str,
-                    "SKU": sku_alvo,
-                    "Codigo_Fornecedor": sku_alvo,
-                    "EAN": sku_alvo,
-                    "Descrição": desc_alvo,
-                    "Unidade": "UN",
-                    "Quantidade": float(qtd_aj),
-                    "Valor_Unitario": 0.0,
-                    "Valor_Total": 0.0,
-                }])
-
-                df_movs_atual = st.session_state.get("df_movs_detalhadas", pd.DataFrame())
-                st.session_state["df_movs_detalhadas"] = pd.concat([df_movs_atual, nova_mov], ignore_index=True)
-
-                df_cons_atual = st.session_state["df_xml_consolidado"].copy()
-                mask = df_cons_atual["SKU"] == sku_alvo
-                if eh_entrada:
-                    df_cons_atual.loc[mask, "Total_Entradas"] += float(qtd_aj)
-                else:
-                    df_cons_atual.loc[mask, "Total_Saidas"] += float(qtd_aj)
-
-                df_cons_atual["Saldo_Calculado"] = (
-                    df_cons_atual["Qtd Inicial"]
-                    + df_cons_atual["Total_Entradas"]
-                    - df_cons_atual["Total_Saidas"]
+            with st.form("form_ajuste_manual", border=False):
+                c_aj1, c_aj2, c_aj3, c_aj4 = st.columns([3, 1.5, 1.5, 1.5])
+                item_sel = c_aj1.selectbox("Produto / EAN:", list(opcoes_sku.keys()), key="aj_sku_sel")
+                motivo_aj = c_aj2.selectbox(
+                    "Motivo:",
+                    ["Quebra / Avaria (-)", "Vencimento (-)", "Consumo Interno (-)", "Acerto Contagem (+)"],
+                    key="aj_motivo",
                 )
-                st.session_state["df_xml_consolidado"] = df_cons_atual
+                qtd_aj = c_aj3.number_input("Quantidade:", min_value=0.01, value=1.0, step=1.0, key="aj_qtd")
+                data_aj = c_aj4.date_input("Data da ocorrência:", value=datetime.now().date(), format="DD/MM/YYYY", key="aj_data")
 
-                st.success(f"Ajuste aplicado! **{motivo_aj}** de **{qtd_aj:g} un** registrado para **{desc_alvo}** em {data_aj.strftime('%d/%m/%Y')}.")
-                st.rerun()
+                enviou_form = st.form_submit_button("✅ Aplicar Ajuste no Estoque", type="primary")
+
+            if enviou_form:
+                sku_alvo, desc_alvo = opcoes_sku[item_sel]
+                _modal_confirmar_ajuste(sku_alvo, desc_alvo, motivo_aj, qtd_aj, data_aj)
 
 
 def main():
