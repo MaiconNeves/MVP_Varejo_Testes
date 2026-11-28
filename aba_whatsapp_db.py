@@ -29,8 +29,7 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
 
         linhas = [
             f"🚨 ALERTA DE RUPTURA — {nome_loja.upper()}",
-            f"{saudacao} Estes itens estão ZERADOS / EM RUPTURA agora (todas as curvas):
-",
+            f"{saudacao} Estes itens estão ZERADOS / EM RUPTURA agora:\n",
         ]
         for _, r in criticos.iterrows():
             dmd = float(r["DMD"])
@@ -39,8 +38,9 @@ def montar_resumo_executivo(nome_loja: str, responsavel: str, df_ind: pd.DataFra
             if sug_calc <= 0 and dmd > 0:
                 sug_calc = max(1.0, round(dmd * cob_alvo - float(r["Saldo_Calculado"])))
             sug = int(round(sug_calc))
+            curva = r.get("Curva_ABC", "C")
 
-            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {r.get('Curva_ABC', '-')})")
+            linhas.append(f"• {r.get('Descrição', r.get('SKU', 'Produto'))} (Curva {curva})")
             linhas.append(f"  Venda média: {dmd:.2f}/dia | Sugestão compra: {sug} un")
         return "\n".join(linhas)
 
